@@ -1,0 +1,15 @@
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.db
+node_modules/
+.pnpm-store/
+.next/
+coverage/
+dist/
+.DS_Store
+uploads/
+test_uploads/
+.dev-pids.json
