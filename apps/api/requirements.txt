@@ -4,7 +4,7 @@ sqlalchemy==2.0.43
 alembic==1.16.5
 psycopg[binary]==3.2.9
 pgvector==0.4.1
-pydantic-settings==2.10.1
+pydantic-settings==2.14.2
 python-multipart==0.0.20
 pypdf==6.0.0
 python-docx==1.2.0
