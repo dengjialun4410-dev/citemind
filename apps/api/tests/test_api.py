@@ -41,6 +41,10 @@ def test_end_to_end_document_chat_and_evaluation() -> None:
         assert upload.json()["chunk_count"] >= 1
         document_id = upload.json()["id"]
 
+        reindex = client.post(f"/api/documents/{document_id}/reindex", headers=headers)
+        assert reindex.status_code == 202
+        assert reindex.json()["status"] == "ready"
+
         noise = client.post(
             f"/api/knowledge-bases/{knowledge_base_id}/documents",
             headers=headers,

@@ -45,6 +45,7 @@ from .schemas import (
 )
 from .services.document_parser import safe_filename
 from .services.document_processing import process_document
+from .services.embeddings import get_embedder
 from .services.generation import generate_answer
 from .services.evaluation import run_retrieval_evaluation
 from .services.retrieval import search
@@ -88,6 +89,7 @@ async def lifespan(_: FastAPI):
     Base.metadata.create_all(bind=engine)
     with SessionLocal() as db:
         seed_demo_data(db)
+    await get_embedder(settings).embed("CiteMind retrieval warmup")
     yield
 
 
@@ -263,6 +265,29 @@ def delete_document(
     db.delete(document)
     db.commit()
     path.unlink(missing_ok=True)
+
+
+@app.post("/api/documents/{document_id}/reindex", response_model=DocumentOut, status_code=status.HTTP_202_ACCEPTED)
+async def reindex_document(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Document:
+    document = db.get(Document, document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="文档不存在")
+    require_knowledge_base(db, document.knowledge_base_id, current_user, write=True)
+    if not Path(document.file_path).exists():
+        raise HTTPException(status_code=410, detail="原始文档文件已丢失，无法重新索引")
+    document.status = "processing"
+    document.error_message = None
+    db.commit()
+    if settings.celery_task_always_eager:
+        await process_document(document.id)
+    else:
+        process_document_task.delay(document.id)
+    db.refresh(document)
+    return document
 
 
 @app.post("/api/knowledge-bases/{knowledge_base_id}/chat", response_model=ChatResponse)

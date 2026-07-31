@@ -11,5 +11,6 @@ coverage/
 dist/
 .DS_Store
 uploads/
+model_cache/
 test_uploads/
 .dev-pids.json

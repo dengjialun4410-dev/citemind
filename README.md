@@ -25,8 +25,9 @@ CiteMind123!
 - Celery + Redis 异步解析、失败状态与任务重试
 - 章节感知切分，保留文件、页码和章节元数据
 - PostgreSQL + pgvector 原生向量存储，SQLite 零配置降级
-- Hashing、OpenAI、Ollama 三种 Embedding 提供商
-- 词项与向量混合检索
+- FastEmbed multilingual-e5、Hashing、OpenAI、Ollama 四种 Embedding 提供商
+- 多语言稠密向量 + BM25 二阶段混合检索
+- 文档级检索范围与一键重新索引
 - 本地摘要与 OpenAI 兼容模型综合回答
 - 回答关联文件、页码、章节、原文和相关度
 - 一键将问答证据加入评测集
@@ -46,7 +47,7 @@ Next.js 16 / React 19
           └── Celery ─ Redis ─ Document Worker
                                ├── pypdf / python-docx
                                ├── 章节感知切分
-                               └── Hashing / OpenAI / Ollama Embedding
+                               └── multilingual-e5 / OpenAI / Ollama Embedding
 ```
 
 ## Docker 启动（推荐）
@@ -84,7 +85,7 @@ CiteMind123!
 
 ## 无 Docker 本地开发
 
-后端默认使用 SQLite、Hashing Embedding 和 eager 任务，无需 PostgreSQL、Redis或模型密钥：
+后端默认使用 SQLite、multilingual-e5-small 和 eager 任务，无需 PostgreSQL、Redis或模型密钥。首次建立索引会下载本地 ONNX 模型：
 
 ```bash
 cd apps/api
@@ -101,6 +102,8 @@ pnpm dev
 ```
 
 ## 使用真实 Embedding
+
+默认配置已经使用支持中英跨语言检索的 `intfloat/multilingual-e5-small`（384 维）。模型切换后，在文档面板选择论文并点击“重建索引”。测试环境可设置 `EMBEDDING_PROVIDER=hashing` 避免下载模型，但不应将 Hashing 用于真实问答。
 
 ### OpenAI 兼容服务
 
@@ -172,7 +175,7 @@ docker-compose.yml            完整生产形态本地编排
 
 - SQLite 模式以 JSON 保存向量，适合开发和测试；正式部署使用 pgvector。
 - 扫描版 PDF 尚未接入 OCR。
-- 当前混合检索使用轻量词项评分，下一步可接 OpenSearch/BM25 和 Cross-Encoder Reranker。
+- 当前混合检索使用 multilingual-e5 + 内存 BM25；大规模知识库下一步可接 OpenSearch 和 Cross-Encoder Reranker。
 - 评测标签由用户从问答引用中创建，后续可加入批量 CSV 导入和 nDCG。
 
 ## License

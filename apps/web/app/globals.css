@@ -131,6 +131,8 @@ svg { width: 20px; height: 20px; }
 .scope-row { margin-top: 15px; display: flex; align-items: center; justify-content: space-between; color: #8c9590; font-size: 8px; }
 .scope-row button { padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: white; color: #77817c; font-size: 8px; cursor: pointer; }
 .scope-row button.active { border-color: #afc4b7; background: var(--soft-green); color: var(--green); }
+.scope-actions { display: flex; gap: 5px; }
+.scope-row button:disabled { opacity: .55; cursor: wait; }
 .document-list { margin-top: 18px; }
 .empty-docs { padding: 35px 10px; text-align: center; color: #a1a8a4; }
 .empty-docs svg { width: 27px; height: 27px; }

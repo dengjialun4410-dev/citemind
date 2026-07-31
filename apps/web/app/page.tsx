@@ -33,6 +33,7 @@ export default function Home() {
   const [conversationId, setConversationId] = useState<number>();
   const [isUploading, setUploading] = useState(false);
   const [isAsking, setAsking] = useState(false);
+  const [reindexingId, setReindexingId] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [evaluationDatasets, setEvaluationDatasets] = useState<EvaluationDataset[]>([]);
@@ -175,6 +176,22 @@ export default function Home() {
     }
   }
 
+  async function reindexSelectedDocument() {
+    if (typeof selectedDocumentId !== "number" || reindexingId) return;
+    setReindexingId(selectedDocumentId);
+    setError("");
+    try {
+      const updated = await api.reindexDocument(selectedDocumentId);
+      setDocuments((items) => items.map((item) => item.id === updated.id ? updated : item));
+      setNotice("已使用当前 Embedding 模型重新建立索引");
+      window.setTimeout(() => setNotice(""), 2600);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "重新索引失败");
+    } finally {
+      setReindexingId(null);
+    }
+  }
+
   function submit(event: FormEvent) {
     event.preventDefault();
     void ask();
@@ -256,10 +273,10 @@ export default function Home() {
                       <div className="message-body">
                         <div className="message-meta">{message.role === "user" ? "你的问题" : "CiteMind"}</div>
                         <p>{message.content}</p>
-                        {message.result && <div className="answer-meta"><span><CheckIcon /> 已核对 {message.result.citations.length} 条证据</span><span>检索 {message.result.retrieval_ms} ms</span><span>{message.result.generation_mode === "remote-llm" ? "模型综合" : "本地摘要"}</span></div>}
+                        {message.result && <div className="answer-meta"><span><CheckIcon /> 已核对 {message.result.citations.length} 条证据</span><span>语义 + BM25 · {message.result.retrieval_ms} ms</span><span>{message.result.generation_mode === "remote-llm" ? "模型综合" : message.result.generation_mode === "local-fallback" ? "模型降级" : "本地摘要"}</span></div>}
                         {message.result?.citations.map((citation, citationIndex) => (
                           <details className="citation" key={citation.chunk_id}>
-                            <summary><QuoteIcon /><span>[{citationIndex + 1}] {citation.document_name}</span><b>第 {citation.page_number} 页</b></summary>
+                            <summary><QuoteIcon /><span>[{citationIndex + 1}] {citation.document_name}</span><b>相关度 {Math.round(Math.min(1, citation.score) * 100)}% · 第 {citation.page_number} 页</b></summary>
                             <p>{citation.quote}</p><button type="button" onClick={() => void addCitationToEvaluation(messages[index - 1]?.content ?? "", citation.chunk_id)}>+ 设为评测相关证据</button>
                           </details>
                         ))}
@@ -287,7 +304,7 @@ export default function Home() {
             </button>
             <input ref={fileInput} type="file" accept=".pdf,.docx,.md,.txt" onChange={onFile} hidden />
             {error && <div className="error-banner">{error}</div>}
-            {documents.length > 0 && <div className="scope-row"><span>检索范围</span><button className={selectedDocumentId === "all" ? "active" : ""} onClick={() => setSelectedDocumentId("all")}>全部文档</button></div>}
+            {documents.length > 0 && <div className="scope-row"><span>检索范围</span><div className="scope-actions"><button className={selectedDocumentId === "all" ? "active" : ""} onClick={() => setSelectedDocumentId("all")}>全部文档</button>{typeof selectedDocumentId === "number" && <button onClick={() => void reindexSelectedDocument()} disabled={Boolean(reindexingId)}>{reindexingId ? "索引中…" : "重建索引"}</button>}</div></div>}
             <div className="document-list">
               {documents.length === 0 ? <div className="empty-docs"><FileIcon /><p>知识库还是空的</p><small>上传第一篇文档后即可开始提问</small></div> : documents.map((doc) => (
                 <button type="button" className={`document-card ${selectedDocumentId === doc.id ? "selected" : ""}`} key={doc.id} onClick={() => doc.status === "ready" && setSelectedDocumentId(doc.id)} disabled={doc.status !== "ready"}>

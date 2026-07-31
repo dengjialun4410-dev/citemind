@@ -37,6 +37,8 @@
 
 Docker 完整模式由 Celery Worker 异步处理；轻量模式会在 API 进程中直接完成。
 
+如果更换了 Embedding 模型，先选中已有文档，再点击“重建索引”。
+
 如果 PDF 是整页图片，当前版本可能无法提取文字，需要后续 OCR 模块。
 
 ## 3. 提问
@@ -50,7 +52,7 @@ Docker 完整模式由 Celery Worker 异步处理；轻量模式会在 API 进�
 这项工作的主要局限是什么？
 ```
 
-系统会执行向量与词项混合检索，再返回：
+建议先在右侧选中目标论文；只有需要跨论文比较时才选择“全部文档”。系统会执行多语言语义向量与 BM25 混合检索，再返回：
 
 - 回答正文；
 - 使用的证据数量；
@@ -79,24 +81,24 @@ Docker 完整模式由 Celery Worker 异步处理；轻量模式会在 API 进�
 - `Hit Rate`：至少命中一条正确证据的问题比例；
 - 延迟：平均检索耗时。
 
-简历中应填写真实评测数据，并说明测试集规模。例如：
-
-> 在 120 个领域问题组成的测试集上，混合检索 Recall@5 达到 0.86，MRR 达到 0.79。
-
-不要使用只有一个问题的演示结果作为正式项目指标。
+简历中只能填写项目实际运行产生的评测数据，并同时说明问题数量、文档数量、Top-K 和标注方法。不要复制虚构指标，也不要使用只有一个问题的演示结果作为正式项目指标。
 
 ## 5. 模型运行模式
 
-### 零密钥模式
+### 默认本地多语言模式
 
 默认配置：
 
 ```env
-EMBEDDING_PROVIDER=hashing
+EMBEDDING_PROVIDER=fastembed
+EMBEDDING_MODEL=intfloat/multilingual-e5-small
+EMBEDDING_DIMENSIONS=384
 OPENAI_API_KEY=
 ```
 
-该模式不会向外部发送文档，适合检查功能。回答是检索摘要，不具备完整的大模型综合能力。
+该模式不会向外部发送文档，支持中文问题检索中英文论文。回答是结构化证据摘要，不具备完整的大模型综合推理能力。首次运行需要从 Hugging Face 下载模型。
+
+`EMBEDDING_PROVIDER=hashing` 仅用于自动化测试或离线检查流程，不建议用于真实论文检索。
 
 ### OpenAI 兼容 Embedding
 
@@ -119,7 +121,7 @@ EMBEDDING_DIMENSIONS=768
 EMBEDDING_BASE_URL=http://localhost:11434
 ```
 
-更换 Embedding 模型或维度后，已有文档必须重新建立索引。pgvector 列维度也要通过数据库迁移同步修改。
+更换 Embedding 模型后，已有文档必须点击“重建索引”。如果维度发生变化，pgvector 列维度也要通过数据库迁移同步修改。
 
 ### 大模型综合回答
 
@@ -140,7 +142,7 @@ OPENAI_CHAT_MODEL=gpt-4.1-mini
   "status": "ok",
   "model_mode": "local-extractive",
   "database_backend": "sqlite",
-  "embedding_provider": "hashing",
+  "embedding_provider": "fastembed",
   "task_mode": "eager"
 }
 ```

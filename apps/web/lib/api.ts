@@ -39,6 +39,7 @@ export const api = {
   listKnowledgeBases: () => authFetch("/api/knowledge-bases", { cache: "no-store" }).then(parseResponse<KnowledgeBase[]>),
   listDocuments: (knowledgeBaseId: number) => authFetch(`/api/knowledge-bases/${knowledgeBaseId}/documents`, { cache: "no-store" }).then(parseResponse<DocumentItem[]>),
   uploadDocument: (knowledgeBaseId: number, file: File) => { const form = new FormData(); form.append("file", file); return authFetch(`/api/knowledge-bases/${knowledgeBaseId}/documents`, { method: "POST", body: form }).then(parseResponse<DocumentItem>); },
+  reindexDocument: (documentId: number) => authFetch(`/api/documents/${documentId}/reindex`, { method: "POST" }).then(parseResponse<DocumentItem>),
   ask: (knowledgeBaseId: number, question: string, conversationId?: number, documentIds?: number[]) => authFetch(`/api/knowledge-bases/${knowledgeBaseId}/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question, conversation_id: conversationId, document_ids: documentIds }) }).then(parseResponse<ChatResult>),
   listEvaluationDatasets: (knowledgeBaseId: number) => authFetch(`/api/knowledge-bases/${knowledgeBaseId}/evaluation-datasets`).then(parseResponse<EvaluationDataset[]>),
   createEvaluationDataset: (knowledgeBaseId: number, name: string) => authFetch(`/api/knowledge-bases/${knowledgeBaseId}/evaluation-datasets`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }).then(parseResponse<EvaluationDataset>),

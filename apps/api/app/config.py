@@ -15,11 +15,13 @@ class Settings(BaseSettings):
     chunk_size: int = 900
     chunk_overlap: int = 140
     retrieval_top_k: int = 5
-    embedding_provider: str = "hashing"
-    embedding_model: str = "text-embedding-3-small"
+    embedding_provider: str = "fastembed"
+    embedding_model: str = "intfloat/multilingual-e5-small"
     embedding_dimensions: int = 384
+    embedding_cache_dir: Path = Path("./model_cache")
     embedding_base_url: str = ""
     embedding_api_key: str = ""
+    retrieval_candidate_k: int = 40
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/1"
     celery_task_always_eager: bool = True
