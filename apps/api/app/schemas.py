@@ -79,6 +79,8 @@ class ChatResponse(BaseModel):
     citations: list[CitationOut]
     retrieval_ms: int
     generation_mode: str
+    confidence: str
+    evidence_coverage: float
 
 
 class HealthResponse(BaseModel):

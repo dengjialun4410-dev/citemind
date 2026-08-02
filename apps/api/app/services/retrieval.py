@@ -81,9 +81,9 @@ def _reference_penalty(content: str, page_number: int) -> float:
     year_count = len(re.findall(r"\b(?:19|20)\d{2}\b", lowered))
     bibliography_signals = sum(lowered.count(signal) for signal in ("arxiv preprint", "in proceedings", "transactions on"))
     if (year_count >= 5 and bibliography_signals >= 2) or lowered.lstrip().startswith("references"):
-        return 0.35
+        return 0.75
     if page_number > 1 and year_count >= 8:
-        return 0.18
+        return 0.35
     return 0.0
 
 
@@ -134,6 +134,40 @@ def _minmax(values: list[float]) -> list[float]:
     if math.isclose(low, high):
         return [1.0 if high > 0 else 0.0 for _ in values]
     return [(value - low) / (high - low) for value in values]
+
+
+def _content_fingerprint(content: str) -> set[str]:
+    tokens = _tokens(content[:900])
+    return set(tokens)
+
+
+def _similarity_penalty(candidate: SearchHit, selected: list[SearchHit]) -> float:
+    if not selected:
+        return 0.0
+    candidate_terms = _content_fingerprint(candidate.chunk.content)
+    penalty = 0.0
+    for existing in selected:
+        existing_terms = _content_fingerprint(existing.chunk.content)
+        overlap = len(candidate_terms & existing_terms) / max(1, len(candidate_terms | existing_terms))
+        same_page = candidate.document_name == existing.document_name and candidate.chunk.page_number == existing.chunk.page_number
+        adjacent = same_page and abs(candidate.chunk.chunk_index - existing.chunk.chunk_index) <= 1
+        penalty = max(penalty, overlap + (0.18 if same_page else 0.0) + (0.12 if adjacent else 0.0))
+    return penalty
+
+
+def _select_diverse_hits(hits: list[SearchHit], top_k: int) -> list[SearchHit]:
+    selected: list[SearchHit] = []
+    remaining = hits[:]
+    while remaining and len(selected) < top_k:
+        if not selected:
+            selected.append(remaining.pop(0))
+            continue
+        best_index, _ = max(
+            enumerate(remaining),
+            key=lambda item: item[1].score - 0.22 * _similarity_penalty(item[1], selected),
+        )
+        selected.append(remaining.pop(best_index))
+    return selected
 
 
 async def search(
@@ -200,4 +234,4 @@ async def search(
         )
     hits.sort(key=lambda hit: hit.score, reverse=True)
     elapsed_ms = round((perf_counter() - started) * 1000)
-    return hits[:top_k], elapsed_ms
+    return _select_diverse_hits(hits, top_k), elapsed_ms

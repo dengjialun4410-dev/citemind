@@ -63,6 +63,8 @@ def test_end_to_end_document_chat_and_evaluation() -> None:
         assert body["citations"][0]["document_name"] == "transformer.md"
         assert {citation["document_name"] for citation in body["citations"]} == {"transformer.md"}
         assert body["generation_mode"] == "local-extractive"
+        assert body["confidence"] in {"high", "medium", "low"}
+        assert 0 <= body["evidence_coverage"] <= 1
 
         dataset = client.post(
             f"/api/knowledge-bases/{knowledge_base_id}/evaluation-datasets",

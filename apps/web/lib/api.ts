@@ -5,7 +5,7 @@ export interface AuthResult { access_token: string; token_type: string; user: Us
 export interface KnowledgeBase { id: number; name: string; description: string; document_count: number; created_at: string }
 export interface DocumentItem { id: number; name: string; file_type: string; status: "processing" | "ready" | "failed"; page_count: number; chunk_count: number; error_message?: string; created_at: string }
 export interface Citation { chunk_id: number; document_name: string; page_number: number; section: string; quote: string; score: number }
-export interface ChatResult { conversation_id: number; answer: string; citations: Citation[]; retrieval_ms: number; generation_mode: string }
+export interface ChatResult { conversation_id: number; answer: string; citations: Citation[]; retrieval_ms: number; generation_mode: string; confidence: "high" | "medium" | "low"; evidence_coverage: number }
 export interface EvaluationDataset { id: number; knowledge_base_id: number; name: string; description: string; question_count: number; created_at: string }
 export interface EvaluationRun { id: number; dataset_id: number; top_k: number; recall_at_k: number; precision_at_k: number; mrr: number; hit_rate: number; average_latency_ms: number; created_at: string }
 

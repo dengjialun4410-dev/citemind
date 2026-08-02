@@ -92,6 +92,9 @@ svg { width: 20px; height: 20px; }
 .answer-meta { display: flex; gap: 13px; flex-wrap: wrap; margin-top: 12px; color: #8a918e; font-size: 9px; }
 .answer-meta span { display: flex; align-items: center; gap: 4px; }
 .answer-meta svg { width: 12px; color: var(--green-2); }
+.answer-meta .confidence.high { color: var(--green-2); }
+.answer-meta .confidence.medium { color: var(--amber); }
+.answer-meta .confidence.low { color: #a84d40; }
 .citation { margin-top: 8px; background: rgba(255,255,255,.7); border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
 .citation summary { padding: 9px 11px; display: grid; grid-template-columns: 17px 1fr auto; gap: 7px; align-items: center; cursor: pointer; color: #4a5550; font-size: 10px; list-style: none; }
 .citation summary::-webkit-details-marker { display: none; }

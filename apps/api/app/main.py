@@ -1,4 +1,5 @@
 import hashlib
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import uuid4
@@ -52,6 +53,31 @@ from .services.retrieval import search
 from .tasks import process_document_task
 
 settings = get_settings()
+
+
+def summarize_evidence_quality(hits: list) -> tuple[str, float]:
+    if not hits:
+        return "low", 0.0
+    unique_pages = {(hit.document_name, hit.chunk.page_number) for hit in hits}
+    strong_hits = sum(1 for hit in hits if hit.score >= 0.55)
+    coverage = min(
+        1.0,
+        len(unique_pages) / max(1, min(3, len(hits))) * 0.45
+        + strong_hits / max(1, len(hits)) * 0.45
+        + min(1.0, hits[0].score) * 0.10,
+    )
+    if coverage >= 0.72:
+        return "high", round(coverage, 4)
+    if coverage >= 0.42:
+        return "medium", round(coverage, 4)
+    return "low", round(coverage, 4)
+
+
+def cited_evidence_window(answer: str, hits: list) -> list:
+    cited_numbers = [int(value) for value in re.findall(r"\[(\d{1,2})\]", answer)]
+    if not cited_numbers:
+        return hits
+    return hits[: min(len(hits), max(cited_numbers))]
 
 
 def seed_demo_data(db: Session) -> None:
@@ -343,8 +369,9 @@ async def chat(
     assistant_message = Message(conversation_id=conversation.id, role="assistant", content=answer)
     db.add(assistant_message)
     db.flush()
+    cited_hits = cited_evidence_window(answer, hits)
     citations: list[CitationOut] = []
-    for hit in hits:
+    for hit in cited_hits:
         quote = hit.chunk.content[:420]
         db.add(
             Citation(
@@ -366,6 +393,7 @@ async def chat(
                 score=round(hit.score, 4),
             )
         )
+    confidence, evidence_coverage = summarize_evidence_quality(cited_hits)
     db.commit()
     return ChatResponse(
         conversation_id=conversation.id,
@@ -373,6 +401,8 @@ async def chat(
         citations=citations,
         retrieval_ms=retrieval_ms,
         generation_mode=generation_mode,
+        confidence=confidence,
+        evidence_coverage=evidence_coverage,
     )
 
 

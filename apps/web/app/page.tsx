@@ -16,6 +16,20 @@ const suggestions = [
   "这项工作的主要局限性是什么？",
 ];
 
+const confidenceLabel = {
+  high: "证据充分",
+  medium: "证据一般",
+  low: "证据不足",
+};
+
+function getConfidence(result: ChatResult) {
+  return result.confidence ?? "medium";
+}
+
+function getEvidenceCoverage(result: ChatResult) {
+  return Number.isFinite(result.evidence_coverage) ? result.evidence_coverage : 0;
+}
+
 export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
@@ -273,7 +287,7 @@ export default function Home() {
                       <div className="message-body">
                         <div className="message-meta">{message.role === "user" ? "你的问题" : "CiteMind"}</div>
                         <p>{message.content}</p>
-                        {message.result && <div className="answer-meta"><span><CheckIcon /> 已核对 {message.result.citations.length} 条证据</span><span>语义 + BM25 · {message.result.retrieval_ms} ms</span><span>{message.result.generation_mode === "remote-llm" ? "模型综合" : message.result.generation_mode === "local-fallback" ? "模型降级" : "本地摘要"}</span></div>}
+                        {message.result && <div className="answer-meta"><span><CheckIcon /> 已核对 {message.result.citations.length} 条证据</span><span>语义 + BM25 · {message.result.retrieval_ms} ms</span><span className={`confidence ${getConfidence(message.result)}`}>{confidenceLabel[getConfidence(message.result)]} · {(getEvidenceCoverage(message.result) * 100).toFixed(0)}%</span><span>{message.result.generation_mode === "remote-llm" ? "模型综合" : message.result.generation_mode === "local-fallback" ? "模型降级" : "本地摘要"}</span></div>}
                         {message.result?.citations.map((citation, citationIndex) => (
                           <details className="citation" key={citation.chunk_id}>
                             <summary><QuoteIcon /><span>[{citationIndex + 1}] {citation.document_name}</span><b>相关度 {Math.round(Math.min(1, citation.score) * 100)}% · 第 {citation.page_number} 页</b></summary>
