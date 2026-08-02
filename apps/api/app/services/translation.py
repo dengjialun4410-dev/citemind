@@ -7,7 +7,20 @@ async def translate_to_chinese(text: str, settings: Settings) -> tuple[str, str]
     if not text.strip():
         return "", "local"
     if not settings.openai_api_key:
-        return "未配置翻译模型。请在 .env 中设置 OPENAI_API_KEY 后重启 API 服务。", "unavailable"
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                response = await client.get(
+                    "https://translate.googleapis.com/translate_a/single",
+                    params={"client": "gtx", "sl": "auto", "tl": "zh-CN", "dt": "t", "q": text},
+                )
+                response.raise_for_status()
+            segments = response.json()[0]
+            translated = "".join(segment[0] for segment in segments if segment and segment[0]).strip()
+            if translated:
+                return translated, "google-free"
+        except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError):
+            pass
+        return "免费翻译服务暂时不可用，请稍后重试。", "unavailable"
     payload = {
         "model": settings.openai_chat_model,
         "messages": [

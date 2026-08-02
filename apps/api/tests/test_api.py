@@ -64,7 +64,7 @@ def test_end_to_end_document_chat_and_evaluation() -> None:
 
         translation = client.post("/api/translate", headers=headers, json={"text": "Transformer uses self-attention."})
         assert translation.status_code == 200
-        assert translation.json()["mode"] == "unavailable"
+        assert translation.json()["mode"] in {"google-free", "unavailable"}
 
         comparison = client.post(
             f"/api/knowledge-bases/{knowledge_base_id}/document-comparison",
