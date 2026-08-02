@@ -43,8 +43,11 @@ from .schemas import (
     KnowledgeBaseOut,
     LoginRequest,
     ReadingCardOut,
+    ReaderChunkOut,
     ResearchEvidenceOut,
     TokenResponse,
+    TranslationRequest,
+    TranslationResponse,
     UserCreate,
     UserOut,
 )
@@ -55,6 +58,7 @@ from .services.generation import generate_answer
 from .services.evaluation import run_retrieval_evaluation
 from .services.retrieval import search
 from .services.research_workspace import build_comparison, build_reading_card
+from .services.translation import translate_to_chinese
 from .tasks import process_document_task
 
 settings = get_settings()
@@ -246,6 +250,35 @@ def get_reading_card(
         raise HTTPException(status_code=409, detail="文档尚未完成解析")
     chunks = list(db.scalars(select(Chunk).where(Chunk.document_id == document_id).order_by(Chunk.chunk_index)))
     return build_reading_card(document, chunks)
+
+
+@app.get("/api/documents/{document_id}/reader", response_model=list[ReaderChunkOut])
+def get_document_reader(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[ReaderChunkOut]:
+    document = db.get(Document, document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="文档不存在")
+    require_knowledge_base(db, document.knowledge_base_id, current_user)
+    if document.status != "ready":
+        raise HTTPException(status_code=409, detail="文档尚未完成解析")
+    chunks = db.scalars(select(Chunk).where(Chunk.document_id == document_id).order_by(Chunk.chunk_index))
+    return [
+        ReaderChunkOut(id=chunk.id, page_number=chunk.page_number, section=chunk.section_path, content=chunk.content)
+        for chunk in chunks
+    ]
+
+
+@app.post("/api/translate", response_model=TranslationResponse)
+async def translate(
+    payload: TranslationRequest,
+    current_user: User = Depends(get_current_user),
+) -> TranslationResponse:
+    del current_user
+    translated_text, mode = await translate_to_chinese(payload.text, settings)
+    return TranslationResponse(translated_text=translated_text, mode=mode)
 
 
 @app.post("/api/knowledge-bases/{knowledge_base_id}/document-comparison", response_model=DocumentComparisonOut)

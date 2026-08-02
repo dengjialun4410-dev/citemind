@@ -87,6 +87,22 @@ class DocumentComparisonOut(BaseModel):
     evidence: dict[int, list[ResearchEvidenceOut]]
 
 
+class ReaderChunkOut(BaseModel):
+    id: int
+    page_number: int
+    section: str
+    content: str
+
+
+class TranslationRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=1200)
+
+
+class TranslationResponse(BaseModel):
+    translated_text: str
+    mode: str
+
+
 class ChatRequest(BaseModel):
     question: str = Field(min_length=2, max_length=4000)
     conversation_id: int | None = None

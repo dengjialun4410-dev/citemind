@@ -58,6 +58,14 @@ def test_end_to_end_document_chat_and_evaluation() -> None:
         assert reading_card.json()["document_name"] == "transformer.md"
         assert reading_card.json()["method"]
 
+        reader = client.get(f"/api/documents/{document_id}/reader", headers=headers)
+        assert reader.status_code == 200
+        assert reader.json()[0]["content"]
+
+        translation = client.post("/api/translate", headers=headers, json={"text": "Transformer uses self-attention."})
+        assert translation.status_code == 200
+        assert translation.json()["mode"] == "unavailable"
+
         comparison = client.post(
             f"/api/knowledge-bases/{knowledge_base_id}/document-comparison",
             headers=headers,

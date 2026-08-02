@@ -9,6 +9,8 @@ export interface ChatResult { conversation_id: number; answer: string; citations
 export interface ResearchEvidence { page_number: number; section: string; quote: string }
 export interface ReadingCard { document_id: number; document_name: string; overview: string; research_question: string; method: string; datasets_and_metrics: string; findings: string; limitations: string; evidence: ResearchEvidence[] }
 export interface DocumentComparison { document_ids: number[]; document_names: string[]; rows: { label: string; values: string[] }[]; evidence: Record<number, ResearchEvidence[]> }
+export interface ReaderChunk { id: number; page_number: number; section: string; content: string }
+export interface TranslationResult { translated_text: string; mode: "remote-llm" | "unavailable" | "local" }
 export interface EvaluationDataset { id: number; knowledge_base_id: number; name: string; description: string; question_count: number; created_at: string }
 export interface EvaluationRun { id: number; dataset_id: number; top_k: number; recall_at_k: number; precision_at_k: number; mrr: number; hit_rate: number; average_latency_ms: number; created_at: string }
 
@@ -44,6 +46,8 @@ export const api = {
   uploadDocument: (knowledgeBaseId: number, file: File) => { const form = new FormData(); form.append("file", file); return authFetch(`/api/knowledge-bases/${knowledgeBaseId}/documents`, { method: "POST", body: form }).then(parseResponse<DocumentItem>); },
   reindexDocument: (documentId: number) => authFetch(`/api/documents/${documentId}/reindex`, { method: "POST" }).then(parseResponse<DocumentItem>),
   getReadingCard: (documentId: number) => authFetch(`/api/documents/${documentId}/reading-card`).then(parseResponse<ReadingCard>),
+  getDocumentReader: (documentId: number) => authFetch(`/api/documents/${documentId}/reader`).then(parseResponse<ReaderChunk[]>),
+  translate: (text: string) => authFetch("/api/translate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) }).then(parseResponse<TranslationResult>),
   compareDocuments: (knowledgeBaseId: number, documentIds: number[]) => authFetch(`/api/knowledge-bases/${knowledgeBaseId}/document-comparison`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(documentIds) }).then(parseResponse<DocumentComparison>),
   ask: (knowledgeBaseId: number, question: string, conversationId?: number, documentIds?: number[]) => authFetch(`/api/knowledge-bases/${knowledgeBaseId}/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question, conversation_id: conversationId, document_ids: documentIds }) }).then(parseResponse<ChatResult>),
   listEvaluationDatasets: (knowledgeBaseId: number) => authFetch(`/api/knowledge-bases/${knowledgeBaseId}/evaluation-datasets`).then(parseResponse<EvaluationDataset[]>),

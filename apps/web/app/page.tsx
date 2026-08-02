@@ -1,7 +1,7 @@
 "use client";
 
 import { ChangeEvent, CSSProperties, FormEvent, useEffect, useRef, useState } from "react";
-import { api, ChatResult, clearToken, DocumentComparison, DocumentItem, EvaluationDataset, EvaluationRun, KnowledgeBase, ReadingCard, saveToken, User } from "@/lib/api";
+import { api, ChatResult, clearToken, DocumentComparison, DocumentItem, EvaluationDataset, EvaluationRun, KnowledgeBase, ReadingCard, ReaderChunk, saveToken, User } from "@/lib/api";
 import { ArrowIcon, CheckIcon, FileIcon, LibraryIcon, PlusIcon, QuoteIcon, SearchIcon, SparkIcon, UploadIcon } from "@/components/icons";
 
 type ChatMessage = {
@@ -21,6 +21,10 @@ const confidenceLabel = {
   medium: "证据一般",
   low: "证据不足",
 };
+
+function splitSentences(text: string) {
+  return text.match(/[^.!?。！？]+[.!?。！？]+|[^.!?。！？]+$/g)?.map((item) => item.trim()).filter((item) => item.length > 1) ?? [text];
+}
 
 function getConfidence(result: ChatResult) {
   return result.confidence ?? "medium";
@@ -58,6 +62,9 @@ export default function Home() {
   const [compareOpen, setCompareOpen] = useState(false);
   const [compareIds, setCompareIds] = useState<number[]>([]);
   const [researchBusy, setResearchBusy] = useState(false);
+  const [reader, setReader] = useState<{ name: string; chunks: ReaderChunk[] } | null>(null);
+  const [translations, setTranslations] = useState<Record<string, string>>({});
+  const [translating, setTranslating] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -242,6 +249,24 @@ export default function Home() {
     }
   }
 
+  async function openReader() {
+    if (typeof selectedDocumentId !== "number" || researchBusy) return;
+    setResearchBusy(true); setError("");
+    try {
+      const chunks = await api.getDocumentReader(selectedDocumentId);
+      setReader({ name: documents.find((item) => item.id === selectedDocumentId)?.name ?? "论文原文", chunks });
+    } catch (err) { setError(err instanceof Error ? err.message : "打开原文失败"); }
+    finally { setResearchBusy(false); }
+  }
+
+  async function translateSentence(sentence: string) {
+    if (translations[sentence] || translating) return;
+    setTranslating(sentence);
+    try { const result = await api.translate(sentence); setTranslations((items) => ({ ...items, [sentence]: result.translated_text })); }
+    catch (err) { setTranslations((items) => ({ ...items, [sentence]: err instanceof Error ? err.message : "翻译失败" })); }
+    finally { setTranslating(null); }
+  }
+
   function submit(event: FormEvent) {
     event.preventDefault();
     void ask();
@@ -299,7 +324,7 @@ export default function Home() {
         {notice && <div className="notice-toast"><CheckIcon />{notice}</div>}
         <header className="topbar">
           <div><p className="eyebrow">当前知识库</p><h1>{activeBase?.name ?? "正在加载..."}</h1></div>
-          <div className="top-actions"><button className="research-action" onClick={() => void openReadingCard()} disabled={typeof selectedDocumentId !== "number" || researchBusy}>阅读卡</button><button className="research-action" onClick={() => { setCompareOpen(true); setCompareIds(documents.filter((doc) => doc.status === "ready").slice(0, 2).map((doc) => doc.id)); }} disabled={documents.filter((doc) => doc.status === "ready").length < 2 || researchBusy}>多文献对比</button><button className="icon-button" aria-label="搜索"><SearchIcon /></button><button className="upload-top" onClick={() => fileInput.current?.click()} disabled={isUploading}><UploadIcon />{isUploading ? "正在解析..." : "上传文档"}</button></div>
+          <div className="top-actions"><button className="research-action" onClick={() => void openReader()} disabled={typeof selectedDocumentId !== "number" || researchBusy}>原文翻译</button><button className="research-action" onClick={() => void openReadingCard()} disabled={typeof selectedDocumentId !== "number" || researchBusy}>阅读卡</button><button className="research-action" onClick={() => { setCompareOpen(true); setCompareIds(documents.filter((doc) => doc.status === "ready").slice(0, 2).map((doc) => doc.id)); }} disabled={documents.filter((doc) => doc.status === "ready").length < 2 || researchBusy}>多文献对比</button><button className="icon-button" aria-label="搜索"><SearchIcon /></button><button className="upload-top" onClick={() => fileInput.current?.click()} disabled={isUploading}><UploadIcon />{isUploading ? "正在解析..." : "上传文档"}</button></div>
         </header>
 
         <div className="content-grid">
@@ -370,6 +395,7 @@ export default function Home() {
       {readingCard && <div className="research-modal" role="dialog" aria-modal="true" aria-label="论文阅读卡"><div className="modal-backdrop" onClick={() => setReadingCard(null)} /><section className="research-sheet reading-sheet"><button className="modal-close" onClick={() => setReadingCard(null)} aria-label="关闭">×</button><p className="eyebrow accent">PAPER READING CARD</p><h2>{readingCard.document_name}</h2><p className="reading-overview">{readingCard.overview}</p><div className="reading-grid">{[["研究问题", readingCard.research_question], ["核心方法", readingCard.method], ["数据集与指标", readingCard.datasets_and_metrics], ["主要发现", readingCard.findings], ["局限与未来工作", readingCard.limitations]].map(([label, value]) => <article key={label}><h3>{label}</h3><p>{value}</p></article>)}</div><div className="evidence-strip"><strong>证据锚点</strong>{readingCard.evidence.map((item, index) => <details key={`${item.page_number}-${index}`}><summary>第 {item.page_number} 页 {item.section && `· ${item.section}`}</summary><p>{item.quote}</p></details>)}</div></section></div>}
       {compareOpen && <div className="research-modal" role="dialog" aria-modal="true" aria-label="选择对比文献"><div className="modal-backdrop" onClick={() => setCompareOpen(false)} /><section className="research-sheet compare-picker"><button className="modal-close" onClick={() => setCompareOpen(false)} aria-label="关闭">×</button><p className="eyebrow accent">COMPARE PAPERS</p><h2>选择 2–5 篇论文</h2><p>系统将从各论文原文证据中抽取相同维度，生成可核查对比表。</p><div className="compare-options">{documents.filter((doc) => doc.status === "ready").map((doc) => <label key={doc.id}><input type="checkbox" checked={compareIds.includes(doc.id)} onChange={() => toggleCompareDocument(doc.id)} /> <span>{doc.name}</span><small>{doc.page_count} 页 · {doc.chunk_count} 个证据块</small></label>)}</div><button className="modal-primary" disabled={compareIds.length < 2 || researchBusy} onClick={() => void buildComparison()}>{researchBusy ? "正在构建…" : `生成对比表（${compareIds.length} 篇）`}</button></section></div>}
       {comparison && <div className="research-modal" role="dialog" aria-modal="true" aria-label="多文献对比表"><div className="modal-backdrop" onClick={() => setComparison(null)} /><section className="research-sheet comparison-sheet"><button className="modal-close" onClick={() => setComparison(null)} aria-label="关闭">×</button><p className="eyebrow accent">EVIDENCE-GROUNDED COMPARISON</p><h2>多文献对比表</h2><div className="comparison-table" style={{ "--document-count": comparison.document_names.length } as CSSProperties}><div className="comparison-row comparison-head"><strong>对比维度</strong>{comparison.document_names.map((name) => <strong key={name}>{name}</strong>)}</div>{comparison.rows.map((row) => <div className="comparison-row" key={row.label}><b>{row.label}</b>{row.values.map((value, index) => <p key={`${row.label}-${index}`}>{value}</p>)}</div>)}</div><p className="comparison-note">每一列均从对应论文的原文证据块抽取；请结合页码证据进一步核查关键结论。</p></section></div>}
+      {reader && <div className="research-modal" role="dialog" aria-modal="true" aria-label="原文逐句翻译"><div className="modal-backdrop" onClick={() => setReader(null)} /><section className="research-sheet reader-sheet"><button className="modal-close" onClick={() => setReader(null)} aria-label="关闭">×</button><p className="eyebrow accent">CLICK-TO-TRANSLATE READER</p><h2>{reader.name}</h2><p className="reader-tip">点击任意英文句子，即可在原文下方显示中文译文。</p>{reader.chunks.map((chunk) => <article className="reader-chunk" key={chunk.id}><small>第 {chunk.page_number} 页 {chunk.section && `· ${chunk.section}`}</small>{splitSentences(chunk.content).map((sentence, index) => <div key={`${chunk.id}-${index}`}><button className="sentence-button" onClick={() => void translateSentence(sentence)}>{sentence}</button>{translations[sentence] && <p className="sentence-translation">中文：{translations[sentence]}</p>}{translating === sentence && <p className="sentence-translation">正在翻译…</p>}</div>)}</article>)}</section></div>}
     </main>
   );
 }
