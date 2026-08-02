@@ -30,6 +30,8 @@ from .schemas import (
     ChatRequest,
     ChatResponse,
     CitationOut,
+    ComparisonRowOut,
+    DocumentComparisonOut,
     DocumentOut,
     EvaluationDatasetCreate,
     EvaluationDatasetOut,
@@ -40,6 +42,8 @@ from .schemas import (
     KnowledgeBaseCreate,
     KnowledgeBaseOut,
     LoginRequest,
+    ReadingCardOut,
+    ResearchEvidenceOut,
     TokenResponse,
     UserCreate,
     UserOut,
@@ -50,6 +54,7 @@ from .services.embeddings import get_embedder
 from .services.generation import generate_answer
 from .services.evaluation import run_retrieval_evaluation
 from .services.retrieval import search
+from .services.research_workspace import build_comparison, build_reading_card
 from .tasks import process_document_task
 
 settings = get_settings()
@@ -225,6 +230,50 @@ def list_documents(
             .order_by(Document.created_at.desc())
         )
     )
+
+
+@app.get("/api/documents/{document_id}/reading-card", response_model=ReadingCardOut)
+def get_reading_card(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, object]:
+    document = db.get(Document, document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail="文档不存在")
+    require_knowledge_base(db, document.knowledge_base_id, current_user)
+    if document.status != "ready":
+        raise HTTPException(status_code=409, detail="文档尚未完成解析")
+    chunks = list(db.scalars(select(Chunk).where(Chunk.document_id == document_id).order_by(Chunk.chunk_index)))
+    return build_reading_card(document, chunks)
+
+
+@app.post("/api/knowledge-bases/{knowledge_base_id}/document-comparison", response_model=DocumentComparisonOut)
+def compare_documents(
+    knowledge_base_id: int,
+    document_ids: list[int],
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, object]:
+    require_knowledge_base(db, knowledge_base_id, current_user)
+    selected_ids = list(dict.fromkeys(document_ids))
+    if not 2 <= len(selected_ids) <= 5:
+        raise HTTPException(status_code=422, detail="请选择 2 到 5 篇已完成解析的文档")
+    documents = list(
+        db.scalars(
+            select(Document).where(
+                Document.knowledge_base_id == knowledge_base_id,
+                Document.id.in_(selected_ids),
+                Document.status == "ready",
+            )
+        )
+    )
+    if len(documents) != len(selected_ids):
+        raise HTTPException(status_code=400, detail="对比范围包含不存在或尚未就绪的文档")
+    ordered_documents = [next(document for document in documents if document.id == document_id) for document_id in selected_ids]
+    chunks = list(db.scalars(select(Chunk).where(Chunk.document_id.in_(selected_ids)).order_by(Chunk.document_id, Chunk.chunk_index)))
+    chunks_by_document = {document_id: [chunk for chunk in chunks if chunk.document_id == document_id] for document_id in selected_ids}
+    return build_comparison(ordered_documents, chunks_by_document)
 
 
 @app.post(

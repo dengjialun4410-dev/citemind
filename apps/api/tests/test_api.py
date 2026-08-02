@@ -51,6 +51,21 @@ def test_end_to_end_document_chat_and_evaluation() -> None:
             files={"file": ("cooking.md", "番茄炒蛋需要番茄、鸡蛋和食用油。", "text/markdown")},
         )
         assert noise.status_code == 202
+        noise_id = noise.json()["id"]
+
+        reading_card = client.get(f"/api/documents/{document_id}/reading-card", headers=headers)
+        assert reading_card.status_code == 200
+        assert reading_card.json()["document_name"] == "transformer.md"
+        assert reading_card.json()["method"]
+
+        comparison = client.post(
+            f"/api/knowledge-bases/{knowledge_base_id}/document-comparison",
+            headers=headers,
+            json=[document_id, noise_id],
+        )
+        assert comparison.status_code == 200
+        assert comparison.json()["document_ids"] == [document_id, noise_id]
+        assert len(comparison.json()["rows"]) == 5
 
         answer = client.post(
             f"/api/knowledge-bases/{knowledge_base_id}/chat",

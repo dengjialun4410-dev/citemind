@@ -57,6 +57,36 @@ class DocumentOut(BaseModel):
     created_at: datetime
 
 
+class ResearchEvidenceOut(BaseModel):
+    page_number: int
+    section: str
+    quote: str
+
+
+class ReadingCardOut(BaseModel):
+    document_id: int
+    document_name: str
+    overview: str
+    research_question: str
+    method: str
+    datasets_and_metrics: str
+    findings: str
+    limitations: str
+    evidence: list[ResearchEvidenceOut]
+
+
+class ComparisonRowOut(BaseModel):
+    label: str
+    values: list[str]
+
+
+class DocumentComparisonOut(BaseModel):
+    document_ids: list[int]
+    document_names: list[str]
+    rows: list[ComparisonRowOut]
+    evidence: dict[int, list[ResearchEvidenceOut]]
+
+
 class ChatRequest(BaseModel):
     question: str = Field(min_length=2, max_length=4000)
     conversation_id: int | None = None

@@ -6,6 +6,9 @@ export interface KnowledgeBase { id: number; name: string; description: string; 
 export interface DocumentItem { id: number; name: string; file_type: string; status: "processing" | "ready" | "failed"; page_count: number; chunk_count: number; error_message?: string; created_at: string }
 export interface Citation { chunk_id: number; document_name: string; page_number: number; section: string; quote: string; score: number }
 export interface ChatResult { conversation_id: number; answer: string; citations: Citation[]; retrieval_ms: number; generation_mode: string; confidence: "high" | "medium" | "low"; evidence_coverage: number }
+export interface ResearchEvidence { page_number: number; section: string; quote: string }
+export interface ReadingCard { document_id: number; document_name: string; overview: string; research_question: string; method: string; datasets_and_metrics: string; findings: string; limitations: string; evidence: ResearchEvidence[] }
+export interface DocumentComparison { document_ids: number[]; document_names: string[]; rows: { label: string; values: string[] }[]; evidence: Record<number, ResearchEvidence[]> }
 export interface EvaluationDataset { id: number; knowledge_base_id: number; name: string; description: string; question_count: number; created_at: string }
 export interface EvaluationRun { id: number; dataset_id: number; top_k: number; recall_at_k: number; precision_at_k: number; mrr: number; hit_rate: number; average_latency_ms: number; created_at: string }
 
@@ -40,6 +43,8 @@ export const api = {
   listDocuments: (knowledgeBaseId: number) => authFetch(`/api/knowledge-bases/${knowledgeBaseId}/documents`, { cache: "no-store" }).then(parseResponse<DocumentItem[]>),
   uploadDocument: (knowledgeBaseId: number, file: File) => { const form = new FormData(); form.append("file", file); return authFetch(`/api/knowledge-bases/${knowledgeBaseId}/documents`, { method: "POST", body: form }).then(parseResponse<DocumentItem>); },
   reindexDocument: (documentId: number) => authFetch(`/api/documents/${documentId}/reindex`, { method: "POST" }).then(parseResponse<DocumentItem>),
+  getReadingCard: (documentId: number) => authFetch(`/api/documents/${documentId}/reading-card`).then(parseResponse<ReadingCard>),
+  compareDocuments: (knowledgeBaseId: number, documentIds: number[]) => authFetch(`/api/knowledge-bases/${knowledgeBaseId}/document-comparison`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(documentIds) }).then(parseResponse<DocumentComparison>),
   ask: (knowledgeBaseId: number, question: string, conversationId?: number, documentIds?: number[]) => authFetch(`/api/knowledge-bases/${knowledgeBaseId}/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question, conversation_id: conversationId, document_ids: documentIds }) }).then(parseResponse<ChatResult>),
   listEvaluationDatasets: (knowledgeBaseId: number) => authFetch(`/api/knowledge-bases/${knowledgeBaseId}/evaluation-datasets`).then(parseResponse<EvaluationDataset[]>),
   createEvaluationDataset: (knowledgeBaseId: number, name: string) => authFetch(`/api/knowledge-bases/${knowledgeBaseId}/evaluation-datasets`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }).then(parseResponse<EvaluationDataset>),
