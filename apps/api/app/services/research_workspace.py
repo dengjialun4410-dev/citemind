@@ -1,6 +1,7 @@
 import re
 
 from ..models import Chunk, Document
+from .text_cleaning import clean_display_text, is_display_noise
 
 
 ASPECTS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -14,7 +15,7 @@ ASPECTS: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 def _sentences(content: str) -> list[str]:
     normalized = re.sub(r"\s+", " ", content).strip()
-    return [item.strip() for item in re.split(r"(?<=[.!?。！？])\s+", normalized) if len(item.strip()) >= 30]
+    return [item.strip() for item in re.split(r"(?<=[.!?。！？])\s+", normalized) if len(item.strip()) >= 30 and not is_display_noise(item)]
 
 
 def _best_chunk(chunks: list[Chunk], signals: tuple[str, ...]) -> Chunk | None:
@@ -33,7 +34,7 @@ def _excerpt(chunk: Chunk | None, signals: tuple[str, ...]) -> str:
         return "文档中未检索到明确表述。"
     candidates = _sentences(chunk.content)
     if not candidates:
-        return re.sub(r"\s+", " ", chunk.content).strip()[:360]
+        return clean_display_text(chunk.content)[:360]
     selected = max(candidates, key=lambda item: sum(signal in item.lower() for signal in signals))
     return selected[:360]
 
@@ -41,7 +42,7 @@ def _excerpt(chunk: Chunk | None, signals: tuple[str, ...]) -> str:
 def _evidence(chunk: Chunk | None) -> list[dict[str, object]]:
     if not chunk:
         return []
-    return [{"page_number": chunk.page_number, "section": chunk.section_path, "quote": re.sub(r"\s+", " ", chunk.content).strip()[:420]}]
+    return [{"page_number": chunk.page_number, "section": chunk.section_path, "quote": clean_display_text(chunk.content)[:420]}]
 
 
 def build_reading_card(document: Document, chunks: list[Chunk]) -> dict[str, object]:

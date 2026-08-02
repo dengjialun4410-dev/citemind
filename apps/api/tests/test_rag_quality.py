@@ -3,6 +3,7 @@ from app.models import Chunk
 from app.services.document_parser import PageText, chunk_pages
 from app.services.generation import _dataset_answer
 from app.services.retrieval import SearchHit, _bm25_scores, _select_diverse_hits
+from app.services.text_cleaning import clean_display_text, is_display_noise
 
 
 def test_bm25_prioritizes_matching_research_evidence() -> None:
@@ -67,3 +68,9 @@ def test_citations_only_persist_evidence_referenced_by_answer() -> None:
     ]
     hits = [SearchHit(chunk=chunk, document_name="paper.pdf", score=0.9) for chunk in chunks]
     assert [hit.chunk.id for hit in cited_evidence_window("Answer based on [1] and [2].", hits)] == [1, 2]
+
+
+def test_display_cleaning_hides_table_and_formula_noise() -> None:
+    noisy = "2026) 93.6 97.9 90.8 93.0 52.5 76.4 σ[−k(s−sc)]"
+    assert is_display_noise(noisy)
+    assert "检测到表格或公式" in clean_display_text(noisy)

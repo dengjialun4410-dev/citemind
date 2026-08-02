@@ -1,11 +1,14 @@
 import httpx
 
 from ..config import Settings
+from .text_cleaning import is_display_noise
 
 
 async def translate_to_chinese(text: str, settings: Settings) -> tuple[str, str]:
     if not text.strip():
         return "", "local"
+    if is_display_noise(text):
+        return "该内容属于表格或公式，建议直接查看原始 PDF 页面以避免符号失真。", "local"
     if not settings.openai_api_key:
         try:
             async with httpx.AsyncClient(timeout=20) as client:

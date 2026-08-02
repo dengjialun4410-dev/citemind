@@ -59,6 +59,7 @@ from .services.evaluation import run_retrieval_evaluation
 from .services.retrieval import search
 from .services.research_workspace import build_comparison, build_reading_card
 from .services.translation import translate_to_chinese
+from .services.text_cleaning import clean_display_text
 from .tasks import process_document_task
 
 settings = get_settings()
@@ -266,7 +267,7 @@ def get_document_reader(
         raise HTTPException(status_code=409, detail="文档尚未完成解析")
     chunks = db.scalars(select(Chunk).where(Chunk.document_id == document_id).order_by(Chunk.chunk_index))
     return [
-        ReaderChunkOut(id=chunk.id, page_number=chunk.page_number, section=chunk.section_path, content=chunk.content)
+        ReaderChunkOut(id=chunk.id, page_number=chunk.page_number, section=chunk.section_path, content=clean_display_text(chunk.content))
         for chunk in chunks
     ]
 
@@ -454,7 +455,7 @@ async def chat(
     cited_hits = cited_evidence_window(answer, hits)
     citations: list[CitationOut] = []
     for hit in cited_hits:
-        quote = hit.chunk.content[:420]
+        quote = clean_display_text(hit.chunk.content)[:420]
         db.add(
             Citation(
                 message_id=assistant_message.id,
