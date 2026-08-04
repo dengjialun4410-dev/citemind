@@ -21,6 +21,10 @@ def auth_headers(client: TestClient) -> dict[str, str]:
 def test_end_to_end_document_chat_and_evaluation() -> None:
     with TestClient(app) as client:
         headers = auth_headers(client)
+        observability = client.get("/api/observability/summary", headers=headers)
+        assert observability.status_code == 200
+        assert observability.json()["database_backend"] == "sqlite"
+        assert "average_latency_ms" in observability.json()
         bases = client.get("/api/knowledge-bases", headers=headers)
         assert bases.status_code == 200
         knowledge_base_id = bases.json()[0]["id"]

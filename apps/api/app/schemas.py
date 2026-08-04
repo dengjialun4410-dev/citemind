@@ -137,6 +137,16 @@ class HealthResponse(BaseModel):
     task_mode: str
 
 
+class ObservabilityOut(BaseModel):
+    request_count: int
+    error_count: int
+    error_rate: float
+    average_latency_ms: float
+    database_backend: str
+    task_mode: str
+    ready_document_count: int
+
+
 class EvaluationDatasetCreate(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     description: str = Field(default="", max_length=500)

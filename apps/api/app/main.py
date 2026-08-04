@@ -1,11 +1,13 @@
 import hashlib
 import re
+from threading import Lock
+from time import perf_counter
 from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import uuid4
 
 import httpx
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -42,6 +44,7 @@ from .schemas import (
     KnowledgeBaseCreate,
     KnowledgeBaseOut,
     LoginRequest,
+    ObservabilityOut,
     ReadingCardOut,
     ReaderChunkOut,
     ResearchEvidenceOut,
@@ -63,6 +66,8 @@ from .services.text_cleaning import clean_display_text
 from .tasks import process_document_task
 
 settings = get_settings()
+_metrics_lock = Lock()
+_request_metrics = {"count": 0, "errors": 0, "total_latency_ms": 0.0}
 
 
 def summarize_evidence_quality(hits: list) -> tuple[str, float]:
@@ -139,6 +144,23 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def collect_request_metrics(request: Request, call_next):  # type: ignore[no-untyped-def]
+    started = perf_counter()
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        return response
+    finally:
+        if request.url.path != "/health":
+            with _metrics_lock:
+                _request_metrics["count"] += 1
+                _request_metrics["total_latency_ms"] += (perf_counter() - started) * 1000
+                if status_code >= 400:
+                    _request_metrics["errors"] += 1
+
+
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(
@@ -147,6 +169,28 @@ def health() -> HealthResponse:
         database_backend=engine.dialect.name,
         embedding_provider=settings.embedding_provider,
         task_mode="eager" if settings.celery_task_always_eager else "celery",
+    )
+
+
+@app.get("/api/observability/summary", response_model=ObservabilityOut)
+def observability_summary(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ObservabilityOut:
+    del current_user
+    with _metrics_lock:
+        request_count = _request_metrics["count"]
+        error_count = _request_metrics["errors"]
+        average_latency_ms = _request_metrics["total_latency_ms"] / max(1, request_count)
+    ready_document_count = db.scalar(select(func.count(Document.id)).where(Document.status == "ready")) or 0
+    return ObservabilityOut(
+        request_count=request_count,
+        error_count=error_count,
+        error_rate=round(error_count / max(1, request_count), 4),
+        average_latency_ms=round(average_latency_ms, 2),
+        database_backend=engine.dialect.name,
+        task_mode="eager" if settings.celery_task_always_eager else "celery",
+        ready_document_count=ready_document_count,
     )
 
 
