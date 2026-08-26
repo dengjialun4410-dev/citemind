@@ -170,6 +170,9 @@ svg { width: 20px; height: 20px; }
 .metric-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: 11px; }
 .metric-grid span { padding: 6px 3px; background: rgba(255,255,255,.07); border-radius: 5px; color: rgba(255,255,255,.48); font-size: 6px; text-align: center; }
 .metric-grid b { display: block; margin-bottom: 2px; color: var(--lime); font-size: 9px; }
+.ops-card { margin-top: 10px; padding: 12px; border: 1px solid #d9e3d9; border-radius: 11px; background: #f7faf4; color: var(--green); }
+.ops-card > div:first-child { display: flex; align-items: center; gap: 8px; }.ops-card > div:first-child > span:last-child { display: flex; flex-direction: column; gap: 2px; }.ops-card strong { font-size: 9px; }.ops-card small { color: #85918a; font-size: 7px; }
+.ops-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: 9px; }.ops-metrics span { padding: 6px 2px; border-radius: 6px; background: white; color: #8a948e; text-align: center; font-size: 6px; }.ops-metrics b { display: block; margin-bottom: 2px; color: var(--green-2); font-size: 9px; }
 
 .research-modal { position: fixed; z-index: 50; inset: 0; display: grid; place-items: center; padding: 28px; }
 .modal-backdrop { position: absolute; inset: 0; background: rgba(16, 40, 32, .48); backdrop-filter: blur(4px); }

@@ -1,4 +1,6 @@
 import hashlib
+import asyncio
+import json
 import re
 from threading import Lock
 from time import perf_counter
@@ -9,6 +11,7 @@ from uuid import uuid4
 import httpx
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -530,6 +533,39 @@ async def chat(
         generation_mode=generation_mode,
         confidence=confidence,
         evidence_coverage=evidence_coverage,
+    )
+
+
+@app.post("/api/knowledge-bases/{knowledge_base_id}/chat/stream")
+async def stream_chat(
+    knowledge_base_id: int,
+    payload: ChatRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> StreamingResponse:
+    result = await chat(knowledge_base_id, payload, db, current_user)
+
+    def event(name: str, data: object) -> str:
+        return f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+    async def generate():  # type: ignore[no-untyped-def]
+        yield event(
+            "metadata",
+            {"conversation_id": result.conversation_id, "retrieval_ms": result.retrieval_ms},
+        )
+        chunk_size = 28
+        for start in range(0, len(result.answer), chunk_size):
+            yield event("delta", {"text": result.answer[start : start + chunk_size]})
+            await asyncio.sleep(0.01)
+        yield event("done", result.model_dump(mode="json"))
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

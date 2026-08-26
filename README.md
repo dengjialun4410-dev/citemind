@@ -29,7 +29,9 @@ CiteMind123!
 - 多语言稠密向量 + BM25 二阶段混合检索
 - 文档级检索范围与一键重新索引
 - 本地摘要与 OpenAI 兼容模型综合回答
+- SSE 流式问答，结束事件携带引用、置信度与检索耗时
 - 回答关联文件、页码、章节、原文和相关度
+- 运行状态面板：数据库、任务模式、平均延迟与错误率
 - 一键将问答证据加入评测集
 - Recall@K、Precision@K、MRR、Hit Rate 和检索延迟
 - Alembic 数据库迁移、Docker Compose 与自动化测试
@@ -42,8 +44,9 @@ Next.js 16 / React 19
           ▼
        FastAPI ───────── PostgreSQL + pgvector
           │                         │
-          ├── 对话与权限             └── 向量与元数据过滤
+          ├── SSE 对话与权限          └── 向量与元数据过滤
           ├── 混合检索 / 评测
+          ├── 请求指标 / 健康检查
           └── Celery ─ Redis ─ Document Worker
                                ├── pypdf / python-docx
                                ├── 章节感知切分

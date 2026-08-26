@@ -93,6 +93,19 @@ def test_end_to_end_document_chat_and_evaluation() -> None:
         assert body["confidence"] in {"high", "medium", "low"}
         assert 0 <= body["evidence_coverage"] <= 1
 
+        with client.stream(
+            "POST",
+            f"/api/knowledge-bases/{knowledge_base_id}/chat/stream",
+            headers=headers,
+            json={"question": "Transformer 的核心机制是什么？", "document_ids": [document_id]},
+        ) as stream:
+            assert stream.status_code == 200
+            assert stream.headers["content-type"].startswith("text/event-stream")
+            payload_text = "".join(stream.iter_text())
+            assert "event: delta" in payload_text
+            assert "event: done" in payload_text
+            assert '"citations"' in payload_text
+
         dataset = client.post(
             f"/api/knowledge-bases/{knowledge_base_id}/evaluation-datasets",
             headers=headers,

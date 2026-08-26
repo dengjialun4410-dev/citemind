@@ -1,7 +1,7 @@
 "use client";
 
 import { ChangeEvent, CSSProperties, FormEvent, useEffect, useRef, useState } from "react";
-import { api, ChatResult, clearToken, DocumentComparison, DocumentItem, EvaluationDataset, EvaluationRun, KnowledgeBase, ReadingCard, ReaderChunk, saveToken, User } from "@/lib/api";
+import { api, ChatResult, clearToken, DocumentComparison, DocumentItem, EvaluationDataset, EvaluationRun, KnowledgeBase, ObservabilitySummary, ReadingCard, ReaderChunk, saveToken, User } from "@/lib/api";
 import { ArrowIcon, CheckIcon, FileIcon, LibraryIcon, PlusIcon, QuoteIcon, SearchIcon, SparkIcon, UploadIcon } from "@/components/icons";
 
 type ChatMessage = {
@@ -57,6 +57,7 @@ export default function Home() {
   const [evaluationDatasets, setEvaluationDatasets] = useState<EvaluationDataset[]>([]);
   const [evaluationRun, setEvaluationRun] = useState<EvaluationRun | null>(null);
   const [evaluationBusy, setEvaluationBusy] = useState(false);
+  const [observability, setObservability] = useState<ObservabilitySummary | null>(null);
   const [readingCard, setReadingCard] = useState<ReadingCard | null>(null);
   const [comparison, setComparison] = useState<DocumentComparison | null>(null);
   const [compareOpen, setCompareOpen] = useState(false);
@@ -107,6 +108,14 @@ export default function Home() {
     }, 1800);
     return () => window.clearInterval(timer);
   }, [activeId, documents]);
+
+  useEffect(() => {
+    if (!user) return;
+    const refresh = () => api.getObservability().then(setObservability).catch(() => undefined);
+    void refresh();
+    const timer = window.setInterval(refresh, 15000);
+    return () => window.clearInterval(timer);
+  }, [user, messages.length, documents.length]);
 
   const activeBase = knowledgeBases.find((item) => item.id === activeId);
 
@@ -186,17 +195,19 @@ export default function Home() {
     if (!prompt || !activeId || isAsking) return;
     setQuestion("");
     setError("");
-    setMessages((current) => [...current, { role: "user", content: prompt }]);
+    setMessages((current) => [...current, { role: "user", content: prompt }, { role: "assistant", content: "" }]);
     setAsking(true);
     try {
       const documentIds = typeof selectedDocumentId === "number" ? [selectedDocumentId] : undefined;
-      const result = await api.ask(activeId, prompt, conversationId, documentIds);
+      const result = await api.askStream(activeId, prompt, conversationId, documentIds, (delta) => {
+        setMessages((current) => current.map((message, index) => index === current.length - 1 ? { ...message, content: message.content + delta } : message));
+      });
       setConversationId(result.conversation_id);
-      setMessages((current) => [...current, { role: "assistant", content: result.answer, result }]);
+      setMessages((current) => current.map((message, index) => index === current.length - 1 ? { ...message, content: result.answer, result } : message));
     } catch (err) {
       const message = err instanceof Error ? err.message : "问答失败";
       setError(message);
-      setMessages((current) => [...current, { role: "assistant", content: `暂时无法回答：${message}` }]);
+      setMessages((current) => current.map((item, index) => index === current.length - 1 ? { role: "assistant", content: `暂时无法回答：${message}` } : item));
     } finally {
       setAsking(false);
     }
@@ -351,7 +362,7 @@ export default function Home() {
                       <div className="message-avatar">{message.role === "user" ? "你" : <SparkIcon />}</div>
                       <div className="message-body">
                         <div className="message-meta">{message.role === "user" ? "你的问题" : "CiteMind"}</div>
-                        {message.role === "assistant" ? renderTranslatableText(message.content, `answer-${index}`) : <p>{message.content}</p>}
+                        {message.role === "assistant" && !message.content ? <div className="thinking"><i /><i /><i />正在流式生成</div> : message.role === "assistant" ? renderTranslatableText(message.content, `answer-${index}`) : <p>{message.content}</p>}
                         {message.result && <div className="answer-meta"><span><CheckIcon /> 已核对 {message.result.citations.length} 条证据</span><span>语义 + BM25 · {message.result.retrieval_ms} ms</span><span className={`confidence ${getConfidence(message.result)}`}>{confidenceLabel[getConfidence(message.result)]} · {(getEvidenceCoverage(message.result) * 100).toFixed(0)}%</span><span>{message.result.generation_mode === "remote-llm" ? "模型综合" : message.result.generation_mode === "local-fallback" ? "模型降级" : "本地摘要"}</span></div>}
                         {message.result?.citations.map((citation, citationIndex) => (
                           <details className="citation" key={citation.chunk_id}>
@@ -362,7 +373,6 @@ export default function Home() {
                       </div>
                     </article>
                   ))}
-                  {isAsking && <article className="message assistant"><div className="message-avatar"><SparkIcon /></div><div className="thinking"><i /><i /><i />正在检索证据</div></article>}
                 </div>
               )}
             </div>
@@ -393,6 +403,7 @@ export default function Home() {
               ))}
             </div>
             <div className="quality-card evaluation-card"><div><QuoteIcon /><span><strong>检索质量评测</strong><small>{evaluationDatasets[0]?.question_count ?? 0} 个基准问题</small></span></div>{evaluationRun ? <div className="metric-grid"><span><b>{(evaluationRun.recall_at_k * 100).toFixed(0)}%</b>Recall@{evaluationRun.top_k}</span><span><b>{evaluationRun.mrr.toFixed(2)}</b>MRR</span><span><b>{evaluationRun.average_latency_ms.toFixed(0)}ms</b>延迟</span></div> : <div className="quality-bar"><i /><i /><i /><i /></div>}<button onClick={() => void runEvaluation()} disabled={!evaluationDatasets[0]?.question_count || evaluationBusy}>{evaluationBusy ? "处理中…" : "运行检索基准测试"}</button></div>
+            {observability && <div className="ops-card"><div><span className="pulse" /><span><strong>运行状态</strong><small>{observability.database_backend.toUpperCase()} · {observability.task_mode === "celery" ? "Celery 异步" : "本地任务"}</small></span></div><div className="ops-metrics"><span><b>{observability.average_latency_ms.toFixed(0)}ms</b>平均响应</span><span><b>{(observability.error_rate * 100).toFixed(1)}%</b>错误率</span><span><b>{observability.ready_document_count}</b>就绪文档</span></div></div>}
           </aside>
         </div>
       </section>
