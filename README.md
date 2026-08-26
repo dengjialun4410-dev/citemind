@@ -24,9 +24,11 @@ CiteMind123!
 - PDF、DOCX、Markdown、TXT 上传与 SHA-256 去重
 - Celery + Redis 异步解析、失败状态与任务重试
 - 章节感知切分，保留文件、页码和章节元数据
+- PDF 跨页页眉/页脚识别，过滤页码、匿名审稿声明和出版版权装饰文本
 - PostgreSQL + pgvector 原生向量存储，SQLite 零配置降级
 - FastEmbed multilingual-e5、Hashing、OpenAI、Ollama 四种 Embedding 提供商
 - 多语言稠密向量 + BM25 二阶段混合检索
+- 原始 BM25/语义相关性门控：无直接证据时拒绝推断，避免“最像但不相关”的结果被强行回答
 - 文档级检索范围与一键重新索引
 - 本地摘要与 OpenAI 兼容模型综合回答
 - SSE 流式问答，结束事件携带引用、置信度与检索耗时
@@ -106,7 +108,7 @@ pnpm dev
 
 ## 使用真实 Embedding
 
-默认配置已经使用支持中英跨语言检索的 `intfloat/multilingual-e5-small`（384 维）。模型切换后，在文档面板选择论文并点击“重建索引”。测试环境可设置 `EMBEDDING_PROVIDER=hashing` 避免下载模型，但不应将 Hashing 用于真实问答。
+默认配置已经使用支持中英跨语言检索的 `intfloat/multilingual-e5-small`（384 维）。模型切换或升级正文清洗规则后，在文档面板选择论文并点击“重建索引”。测试环境可设置 `EMBEDDING_PROVIDER=hashing` 避免下载模型，但不应将 Hashing 用于真实问答。
 
 ### OpenAI 兼容服务
 

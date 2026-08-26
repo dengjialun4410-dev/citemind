@@ -1,4 +1,6 @@
 import re
+import math
+from collections import Counter
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -26,7 +28,8 @@ def extract_pages(content: bytes, extension: str) -> list[PageText]:
     extension = extension.lower()
     if extension == ".pdf":
         reader = PdfReader(BytesIO(content))
-        return [PageText(index + 1, page.extract_text() or "") for index, page in enumerate(reader.pages)]
+        pages = [PageText(index + 1, page.extract_text() or "") for index, page in enumerate(reader.pages)]
+        return _strip_repeated_margins(pages)
     if extension == ".docx":
         document = DocxDocument(BytesIO(content))
         text = "\n".join(paragraph.text for paragraph in document.paragraphs)
@@ -36,9 +39,72 @@ def extract_pages(content: bytes, extension: str) -> list[PageText]:
     raise ValueError(f"暂不支持 {extension or '未知'} 格式")
 
 
+def _normalized_margin_line(line: str) -> str:
+    value = re.sub(r"\s+", " ", line).strip().lower()
+    value = re.sub(r"\b\d+\b", "#", value)
+    return value.strip("-|·• ")
+
+
+def _is_page_decoration(line: str) -> bool:
+    value = line.strip()
+    lowered = value.lower()
+    if not value or re.fullmatch(r"(?:page\s*)?\d+(?:\s*/\s*\d+)?", lowered):
+        return True
+    return bool(
+        re.search(
+            r"anonymous submission|copyright|all rights reserved|doi\s*:|"
+            r"proceedings of|journal of|conference on|arxiv\s*:\s*\d+|"
+            r"vol(?:ume)?\.?\s*\d+\s*(?:,|issue)",
+            lowered,
+        )
+    )
+
+
+def _is_strong_page_decoration(line: str) -> bool:
+    """Publisher/review boilerplate is safe to remove even when PDF ordering puts it mid-page."""
+    return bool(
+        re.search(
+            r"anonymi[sz]ed submission|review purposes only|distribution, citation, or public sharing|"
+            r"copyright and publication details|copyright\s*(?:©|\(c\)|\d{4})|all rights reserved|"
+            r"^\*?corresponding author\.?$",
+            line.strip().lower(),
+        )
+    )
+
+
+def _strip_repeated_margins(pages: list[PageText], boundary_lines: int = 5) -> list[PageText]:
+    """Remove repeated header/footer lines without touching page body text."""
+    if not pages:
+        return pages
+    boundary_keys: Counter[str] = Counter()
+    page_lines: list[list[str]] = []
+    for page in pages:
+        lines = [line.strip() for line in page.text.splitlines() if line.strip()]
+        page_lines.append(lines)
+        boundaries = lines[:boundary_lines] + lines[-boundary_lines:]
+        boundary_keys.update(set(filter(None, (_normalized_margin_line(line) for line in boundaries))))
+    repeat_threshold = max(2, math.ceil(len(pages) * 0.5))
+    repeated = {key for key, count in boundary_keys.items() if count >= repeat_threshold and len(key) >= 3}
+
+    cleaned: list[PageText] = []
+    for page, lines in zip(pages, page_lines):
+        last_index = len(lines) - 1
+        kept = []
+        for index, line in enumerate(lines):
+            is_boundary = index < boundary_lines or index > last_index - boundary_lines
+            repeated_boundary = is_boundary and _normalized_margin_line(line) in repeated
+            decoration = _is_page_decoration(line) and (is_boundary or "anonymous submission" in line.lower())
+            if not repeated_boundary and not decoration and not _is_strong_page_decoration(line):
+                kept.append(line)
+        cleaned.append(PageText(page.page_number, "\n".join(kept)))
+    return cleaned
+
+
 def _clean(text: str) -> str:
     text = text.replace("\x00", " ")
     text = re.sub(r"(?<=[A-Za-z])-\s*\n\s*(?=[a-z])", "", text)
+    text = re.sub(r"(?<=[a-z,;:])\n(?=[a-z])", " ", text)
+    text = re.sub(r"(?<=[a-z])\n(?=[A-Z][a-z]+\s)", " ", text)
     text = re.sub(r"(?<=\))(?=\d)", " ", text)
     text = re.sub(
         r"\b[a-z]{18,}\b",

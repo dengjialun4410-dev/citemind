@@ -4,6 +4,30 @@ import httpx
 
 from ..config import Settings
 from .retrieval import SearchHit, _terms, expand_query
+from .text_cleaning import is_display_noise
+
+
+def _ranked_evidence_sentences(
+    hits: list[SearchHit],
+    signals: tuple[str, ...],
+    limit: int = 3,
+) -> list[tuple[int, str]]:
+    candidates: list[tuple[float, int, str]] = []
+    seen: set[str] = set()
+    for citation, hit in enumerate(hits[:5], start=1):
+        normalized = re.sub(r"\s+", " ", hit.chunk.content).strip()
+        for sentence in re.split(r"(?<=[。！？.!?])\s+|\n+|(?<=[.!?])(?=[A-Z])", normalized):
+            sentence = sentence.strip()
+            lowered = sentence.lower()
+            fingerprint = re.sub(r"\W+", "", lowered)[:160]
+            signal_count = sum(signal in lowered for signal in signals)
+            citation_heavy = len(re.findall(r"\b(?:19|20)\d{2}\b", sentence)) >= 2
+            caption_like = bool(re.match(r"^(?:figure\s*\d*|table\s*\d*|\([a-z]\))", lowered))
+            if signal_count and 24 <= len(sentence) <= 650 and fingerprint not in seen and not is_display_noise(sentence) and not citation_heavy and not caption_like:
+                seen.add(fingerprint)
+                candidates.append((signal_count + hit.score * 0.2, citation, sentence))
+    candidates.sort(reverse=True, key=lambda item: item[0])
+    return [(citation, sentence) for _, citation, sentence in candidates[:limit]]
 
 
 def _best_excerpt(question: str, hit: SearchHit) -> str:
@@ -34,65 +58,69 @@ def _best_excerpt(question: str, hit: SearchHit) -> str:
 
 
 def _dataset_answer(hits: list[SearchHit]) -> str:
-    evidence = "\n".join(hit.chunk.content for hit in hits[:5])
-    lowered = evidence.lower()
-    datasets = [
-        label
-        for label, signals in (
-            ("NTU RGB+D 60（NTU-60）", ("ntu rgb+d 60", "ntu-60")),
-            ("NTU RGB+D 120（NTU-120）", ("ntu rgb+d 120", "ntu-120")),
-            ("Kinetics-Skeleton", ("kinetics-skeleton",)),
-        )
-        if any(signal in lowered for signal in signals)
-    ]
-    metrics = [label for label, signal in (("Top-1 Accuracy", "top-1"), ("Top-5 Accuracy", "top-5")) if signal in lowered]
-    if "accuracy" in lowered and not metrics:
-        metrics.append("分类准确率（Accuracy）")
+    dataset_lines = _ranked_evidence_sentences(
+        hits, ("dataset", "benchmark", "ntu", "kinetics", "imagenet", "cifar", "split"), 2
+    )
+    metric_lines = _ranked_evidence_sentences(
+        hits, ("metric", "accuracy", "top-1", "top-5", "precision", "recall", "f1", "auc"), 2
+    )
+    result_lines = _ranked_evidence_sentences(
+        hits, ("achieves", "obtains", "outperform", "improves", "results show", "results demonstrate"), 2
+    )
 
-    result_lines: list[str] = []
-    for hit in hits[:3]:
-        lines = [re.sub(r"\s+", " ", line).strip() for line in hit.chunk.content.splitlines() if line.strip()]
-        for index, compact in enumerate(lines):
-            if len(compact) > 24 and any(signal in compact.lower() for signal in ("ours", "td-gcn", "achieves", "obtains")):
-                start = max(0, index - 1)
-                result_lines.append(" ".join(lines[start : index + 4])[:420])
-                break
-        if result_lines:
-            break
+    def bullets(items: list[tuple[int, str]], fallback: str) -> str:
+        return "\n".join(f"- {sentence} [{citation}]" for citation, sentence in items) if items else f"- {fallback}"
 
     sections = [
-        "数据集\n" + ("\n".join(f"- {item}" for item in datasets) if datasets else "- 当前证据未明确列出数据集名称"),
-        "评价指标\n" + ("\n".join(f"- {item}" for item in metrics) if metrics else "- 当前证据未明确列出评价指标"),
+        "数据集\n" + bullets(dataset_lines, "当前证据未明确列出数据集名称"),
+        "评价指标\n" + bullets(metric_lines, "当前证据未明确列出评价指标"),
     ]
     if result_lines:
-        sections.append(f"论文报告的结果\n- {result_lines[0]} [1]")
+        sections.append("论文报告的结果\n" + bullets(result_lines, "当前证据未明确报告结果"))
     sections.append("关键结论请结合下方页码引用核查。")
     return "\n\n".join(sections)
 
 
 def _method_answer(hits: list[SearchHit]) -> str:
-    numbered = [(index, hit.chunk.content.lower()) for index, hit in enumerate(hits[:5], start=1)]
+    components = _ranked_evidence_sentences(
+        hits,
+        ("we propose", "we introduce", "we develop", "our method", "contains three", "consists of", "architecture", "module", "component", "block", "branch", "pipeline"),
+        3,
+    )
+    if not components:
+        return ""
+    lines = "\n".join(f"- {sentence} [{citation}]" for citation, sentence in components)
+    return "方法与架构\n" + lines + "\n\n以上内容均为原文证据抽取，不补充论文未明确陈述的模块。"
 
-    def citation_for(*signals: str) -> int | None:
-        return next((index for index, content in numbered if all(signal in content for signal in signals)), None)
 
-    components: list[str] = []
-    persistent = citation_for("persistent-homology", "descriptor")
-    if persistent:
-        components.append(f"- Persistent Homology 分支：从骨架运动中提取全局拓扑描述符。[{persistent}]")
-    film = citation_for("ta-film") or citation_for("feature-wise", "modulation")
-    if film:
-        components.append(f"- TA-FiLM 拓扑调制：根据 joint、bone 和 motion 等不同模态调整拓扑描述符。[{film}]")
-    dynamic = citation_for("dynamic", "graph", "block")
-    if dynamic:
-        components.append(f"- Dynamic Graph Block：融合 node、edge 与 general-relation 流，并结合 SE、时序卷积和残差连接。[{dynamic}]")
-    gates = citation_for("stage-aware", "gate") or citation_for("depth-aware", "gate")
-    if gates:
-        components.append(f"- Stage-aware Gates：控制拓扑信息在浅层、中层和深层网络中的注入强度。[{gates}]")
-
-    if len(components) >= 2:
-        return "模型架构与关键模块\n" + "\n".join(components) + "\n\n以上结构均可在下方对应页码的原文证据中核查。"
-    return ""
+def _definition_answer(question: str, hits: list[SearchHit]) -> str:
+    query_terms = _terms(expand_query(question))
+    required_phrases: tuple[str, ...] = ()
+    if "持久同调" in question or "持续同调" in question:
+        required_phrases = ("persistent homology", "persistent-homology")
+    candidates: list[tuple[float, int, str]] = []
+    for citation, hit in enumerate(hits[:5], start=1):
+        normalized = re.sub(r"\s+", " ", hit.chunk.content).strip()
+        for sentence in re.split(r"(?<=[。！？.!?])\s+|(?<=[.!?])(?=[A-Z])", normalized):
+            sentence = sentence.strip()
+            if not 28 <= len(sentence) <= 650 or is_display_noise(sentence):
+                continue
+            lowered = sentence.lower()
+            if required_phrases and not any(phrase in lowered for phrase in required_phrases):
+                continue
+            overlap = len(query_terms & _terms(sentence)) / max(1, len(query_terms))
+            definition_signal = sum(
+                weight for signal, weight in (
+                    ("defined as", 1.4), ("refers to", 1.3), ("summarizes", 1.2),
+                    ("describes", 1.0), ("means", 0.9), (" is ", 0.25), (" are ", 0.25),
+                ) if signal in lowered
+            )
+            if overlap and definition_signal:
+                candidates.append((overlap + definition_signal * 0.45 + hit.score * 0.1, citation, sentence))
+    if not candidates:
+        return ""
+    _, citation, sentence = max(candidates, key=lambda item: item[0])
+    return f"概念说明\n- {sentence} [{citation}]\n\n该说明直接摘自当前论文；如需更通俗的中文解释，可点击对应证据翻译。"
 
 
 def _summary_answer(hits: list[SearchHit]) -> str:
@@ -130,8 +158,13 @@ def _summary_answer(hits: list[SearchHit]) -> str:
 
 
 def _local_answer(question: str, hits: list[SearchHit]) -> str:
-    if not hits or hits[0].score < 0.02:
-        return "当前知识库中没有找到足够相关的证据。请换一种问法，或上传包含该信息的文档。"
+    if not hits:
+        return "当前知识库中没有找到与问题直接相关的证据，因此本次不作推断。请换一种更具体的问法、选择目标论文，或上传包含该信息的文档。"
+
+    if any(term in question for term in ("什么是", "是什么意思", "定义", "解释")):
+        definition = _definition_answer(question, hits)
+        if definition:
+            return definition
 
     if any(term in question for term in ("局限", "不足", "缺点", "未来工作")):
         explicit = [
