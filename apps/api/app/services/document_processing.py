@@ -8,6 +8,7 @@ from ..database import SessionLocal
 from ..models import Chunk, Document
 from .document_parser import chunk_pages, extract_pages
 from .embeddings import get_embedder
+from .index_signature import current_index_signature
 
 
 async def process_document(document_id: int) -> None:
@@ -48,6 +49,7 @@ async def process_document(document_id: int) -> None:
                 )
             document.page_count = len(pages)
             document.chunk_count = len(parsed_chunks)
+            document.index_signature = current_index_signature(settings)
             document.status = "ready"
             db.commit()
         except Exception as exc:

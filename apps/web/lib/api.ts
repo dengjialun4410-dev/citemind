@@ -1,16 +1,16 @@
-export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
 
 export interface User { id: number; email: string; name: string; created_at: string }
 export interface AuthResult { access_token: string; token_type: string; user: User }
 export interface KnowledgeBase { id: number; name: string; description: string; document_count: number; created_at: string }
-export interface DocumentItem { id: number; name: string; file_type: string; status: "processing" | "ready" | "failed"; page_count: number; chunk_count: number; error_message?: string; created_at: string }
+export interface DocumentItem { id: number; name: string; file_type: string; status: "processing" | "ready" | "failed"; page_count: number; chunk_count: number; needs_reindex: boolean; error_message?: string; created_at: string }
 export interface Citation { chunk_id: number; document_name: string; page_number: number; section: string; quote: string; score: number }
 export interface ChatResult { conversation_id: number; answer: string; citations: Citation[]; retrieval_ms: number; generation_mode: string; confidence: "high" | "medium" | "low"; evidence_coverage: number }
 export interface ResearchEvidence { page_number: number; section: string; quote: string }
 export interface ReadingCard { document_id: number; document_name: string; overview: string; research_question: string; method: string; datasets_and_metrics: string; findings: string; limitations: string; evidence: ResearchEvidence[] }
 export interface DocumentComparison { document_ids: number[]; document_names: string[]; rows: { label: string; values: string[] }[]; evidence: Record<number, ResearchEvidence[]> }
 export interface ReaderChunk { id: number; page_number: number; section: string; content: string }
-export interface TranslationResult { translated_text: string; mode: "remote-llm" | "google-free" | "unavailable" | "local" }
+export interface TranslationResult { translated_text: string; mode: "remote-llm" | "google-free" | "mymemory-free" | "unavailable" | "local" }
 export interface EvaluationDataset { id: number; knowledge_base_id: number; name: string; description: string; question_count: number; created_at: string }
 export interface EvaluationRun { id: number; dataset_id: number; top_k: number; recall_at_k: number; precision_at_k: number; mrr: number; hit_rate: number; average_latency_ms: number; created_at: string }
 export interface ObservabilitySummary { request_count: number; error_count: number; error_rate: number; average_latency_ms: number; database_backend: string; task_mode: string; ready_document_count: number }

@@ -11,13 +11,36 @@ if (Test-Path -LiteralPath $pidFile) {
 if (-not (Test-Path -LiteralPath $pythonExe)) {
     throw "Backend virtual environment not found. Follow README.md local setup first."
 }
+$webExecutable = $null
+$webArguments = @()
 $pnpm = Get-Command pnpm -ErrorAction SilentlyContinue
-if (-not $pnpm) {
-    throw "pnpm not found. Install Node.js and run: corepack enable"
+$corepack = Get-Command corepack -ErrorAction SilentlyContinue
+$node = Get-Command node -ErrorAction SilentlyContinue
+$nextCli = Join-Path $webRoot "node_modules\next\dist\bin\next"
+$codexNode = Join-Path $env:USERPROFILE ".cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe"
+$codexPnpm = Join-Path $env:USERPROFILE ".cache\codex-runtimes\codex-primary-runtime\dependencies\bin\fallback\pnpm.cmd"
+
+if ($pnpm) {
+    $webExecutable = $pnpm.Source
+    $webArguments = @("dev", "--hostname", "127.0.0.1", "--port", "3000")
+} elseif ($corepack) {
+    $webExecutable = $corepack.Source
+    $webArguments = @("pnpm", "dev", "--hostname", "127.0.0.1", "--port", "3000")
+} elseif ($node -and (Test-Path -LiteralPath $nextCli)) {
+    $webExecutable = $node.Source
+    $webArguments = @($nextCli, "dev", "--hostname", "127.0.0.1", "--port", "3000")
+} elseif ((Test-Path -LiteralPath $codexNode) -and (Test-Path -LiteralPath $nextCli)) {
+    $webExecutable = $codexNode
+    $webArguments = @($nextCli, "dev", "--hostname", "127.0.0.1", "--port", "3000")
+} elseif (Test-Path -LiteralPath $codexPnpm) {
+    $webExecutable = $codexPnpm
+    $webArguments = @("dev", "--hostname", "127.0.0.1", "--port", "3000")
+} else {
+    throw "Node.js/pnpm not found. Install Node.js 20+ and run: corepack enable"
 }
 
-$apiProcess = Start-Process -FilePath $pythonExe -ArgumentList "-m","uvicorn","app.main:app","--reload","--host","127.0.0.1","--port","8000" -WorkingDirectory $apiRoot -WindowStyle Hidden -PassThru
-$webProcess = Start-Process -FilePath $pnpm.Source -ArgumentList "dev","--hostname","127.0.0.1","--port","3000" -WorkingDirectory $webRoot -WindowStyle Hidden -PassThru
+$apiProcess = Start-Process -FilePath $pythonExe -ArgumentList "-m","uvicorn","app.main:app","--host","127.0.0.1","--port","8000" -WorkingDirectory $apiRoot -WindowStyle Hidden -PassThru
+$webProcess = Start-Process -FilePath $webExecutable -ArgumentList $webArguments -WorkingDirectory $webRoot -WindowStyle Hidden -PassThru
 
 @{
     api = $apiProcess.Id

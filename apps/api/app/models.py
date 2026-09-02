@@ -67,6 +67,7 @@ class Document(Base):
     status: Mapped[str] = mapped_column(String(30), default="processing")
     page_count: Mapped[int] = mapped_column(Integer, default=0)
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    index_signature: Mapped[str | None] = mapped_column(String(500), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     knowledge_base: Mapped[KnowledgeBase] = relationship(back_populates="documents")

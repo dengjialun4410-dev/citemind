@@ -4,12 +4,13 @@ from collections import Counter
 from dataclasses import dataclass
 from time import perf_counter
 
-from sqlalchemy import select
+from sqlalchemy import func, literal_column, select, text
 from sqlalchemy.orm import Session
 
 from ..models import Chunk, Document
 from ..config import get_settings
 from .embeddings import get_embedder
+from .index_signature import current_index_signature
 
 
 @dataclass
@@ -19,6 +20,8 @@ class SearchHit:
     score: float
     semantic_score: float = 0.0
     lexical_score: float = 0.0
+    expanded_lexical_score: float = 0.0
+    query_coverage: float = 0.0
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -57,13 +60,23 @@ def expand_query(query: str) -> str:
     return f"{query} {' '.join(expansions)}".strip()
 
 
-def _passes_relevance_gate(hit: SearchHit) -> bool:
-    """Reject the artificial top result produced when every candidate is unrelated."""
-    return hit.lexical_score >= 0.35 or hit.semantic_score >= 0.86
+def _passes_relevance_gate(hit: SearchHit, query: str) -> bool:
+    """Reject unrelated candidates without blocking Chinese-to-English recall.
+
+    The multilingual E5 model usually gives a relevant Chinese-query/English-
+    passage pair a lower cosine score than a same-language pair.  Query
+    expansion is therefore treated as real lexical evidence, while the raw
+    semantic fallback uses a slightly lower threshold only for Chinese input.
+    """
+    if hit.lexical_score >= 0.35 or hit.expanded_lexical_score >= 0.35 or hit.query_coverage >= 0.18:
+        return True
+    semantic_threshold = 0.80 if re.search(r"[\u4e00-\u9fff]", query) else 0.86
+    return hit.semantic_score >= semantic_threshold
 
 
-def _intent_bonus(query: str, content: str, page_number: int) -> float:
+def _intent_bonus(query: str, content: str, page_number: int, section_path: str = "") -> float:
     lowered = content.lower()
+    lowered_section = section_path.lower()
     bonus = 0.0
     if any(term in query for term in ("什么是", "是什么意思", "定义", "解释")):
         definition_signals = ("defined as", "refers to", "summarizes", "means")
@@ -80,16 +93,26 @@ def _intent_bonus(query: str, content: str, page_number: int) -> float:
             bonus += 0.1
         if "abstract" in lowered:
             bonus += 0.1
+        if "overview" in lowered or "overview" in lowered_section:
+            bonus += 0.28
         if "contribution" in lowered:
             bonus += 0.16
         if "we propose" in lowered or "we develop" in lowered or "we introduce" in lowered:
             bonus += 0.14
+        if any(signal in lowered_section for signal in ("abstract", "introduction", "conclusion", "摘要", "引言", "结论")):
+            bonus += 0.12
     if any(term in query for term in ("局限", "不足", "缺点", "未来工作")):
         if "limitation" in lowered or "future work" in lowered or "drawback" in lowered:
             bonus += 0.2
+        if any(signal in lowered_section for signal in ("limitation", "discussion", "conclusion", "局限", "讨论", "结论")):
+            bonus += 0.14
     if any(term in query for term in ("方法", "模型", "模块", "架构", "结构", "怎么做")):
         method_signals = ("architecture", "contains three components", "branch", "module", "block", "pipeline", "framework")
         bonus += min(0.24, sum(0.04 for signal in method_signals if signal in lowered))
+        if any(signal in lowered_section for signal in ("method", "methodology", "approach", "architecture", "方法", "模型")):
+            bonus += 0.14
+        if any(signal in lowered_section for signal in ("related work", "references", "相关工作", "参考文献")):
+            bonus -= 0.22
     return bonus
 
 
@@ -119,6 +142,16 @@ def _tokens(text: str) -> list[str]:
     return latin + bigrams
 
 
+def _postgres_or_tsquery(text_value: str) -> str:
+    """Build a parameterized OR tsquery from already-tokenized safe lexemes."""
+    safe_tokens = []
+    for token in _tokens(text_value):
+        cleaned = "".join(re.findall(r"[a-zA-Z0-9_]+|[\u4e00-\u9fff]+", token))
+        if cleaned and cleaned not in safe_tokens:
+            safe_tokens.append(cleaned)
+    return " | ".join(safe_tokens) or "citemind_no_match"
+
+
 def _bm25_scores(query: str, contents: list[str], k1: float = 1.5, b: float = 0.75) -> list[float]:
     """Small in-memory BM25 stage for personal knowledge bases."""
     query_tokens = list(dict.fromkeys(_tokens(query)))
@@ -144,13 +177,25 @@ def _bm25_scores(query: str, contents: list[str], k1: float = 1.5, b: float = 0.
     return scores
 
 
-def _minmax(values: list[float]) -> list[float]:
-    if not values:
-        return []
-    low, high = min(values), max(values)
-    if math.isclose(low, high):
-        return [1.0 if high > 0 else 0.0 for _ in values]
-    return [(value - low) / (high - low) for value in values]
+def _reciprocal_rank_scores(values: list[float], rank_constant: int = 60) -> list[float]:
+    """Turn incomparable raw scores into stable 0..1 rank scores.
+
+    Equal values receive the same dense rank. Non-positive lexical scores remain
+    zero so absent terms cannot gain relevance merely from list position.
+    """
+    positive_values = sorted({value for value in values if value > 0.0}, reverse=True)
+    ranks = {value: rank for rank, value in enumerate(positive_values, start=1)}
+    return [
+        (rank_constant + 1) / (rank_constant + ranks[value]) if value > 0.0 else 0.0
+        for value in values
+    ]
+
+
+def _query_coverage(query: str, content: str) -> float:
+    query_terms = _terms(query)
+    if not query_terms:
+        return 0.0
+    return len(query_terms & _terms(content)) / len(query_terms)
 
 
 def _content_fingerprint(content: str) -> set[str]:
@@ -202,18 +247,50 @@ async def search(
     base_query = (
         select(Chunk, Document.name)
         .join(Document, Chunk.document_id == Document.id)
-        .where(Document.knowledge_base_id == knowledge_base_id, Document.status == "ready")
+        .where(
+            Document.knowledge_base_id == knowledge_base_id,
+            Document.status == "ready",
+            Document.index_signature == current_index_signature(settings),
+        )
     )
     if document_ids:
         base_query = base_query.where(Document.id.in_(document_ids))
     if db.bind and db.bind.dialect.name == "postgresql":
+        candidate_limit = max(top_k * 10, settings.retrieval_candidate_k)
+        db.execute(text(f"SET LOCAL hnsw.ef_search = {max(1, settings.pgvector_hnsw_ef_search)}"))
         distance = Chunk.embedding.op("<=>")(query_embedding)
-        rows = db.execute(
+        vector_rows = db.execute(
             base_query.add_columns(distance.label("distance"))
             .order_by(distance)
-            .limit(max(top_k * 8, settings.retrieval_candidate_k))
+            .limit(candidate_limit)
         ).all()
-        candidates = [(chunk, document_name, max(0.0, 1.0 - float(vector_distance))) for chunk, document_name, vector_distance in rows]
+        candidate_map = {
+            chunk.id: (chunk, document_name, max(0.0, 1.0 - float(vector_distance)))
+            for chunk, document_name, vector_distance in vector_rows
+        }
+
+        # PostgreSQL production mode performs a real lexical recall alongside
+        # vector recall instead of applying BM25 only to vector-selected rows.
+        search_vector = func.to_tsvector(
+            literal_column("'simple'"),
+            func.coalesce(Chunk.section_path, "") + literal_column("' '") + Chunk.content,
+        )
+        ts_query = func.to_tsquery(literal_column("'simple'"), _postgres_or_tsquery(expanded_query))
+        text_rank = func.ts_rank_cd(search_vector, ts_query)
+        lexical_rows = db.execute(
+            base_query.add_columns(text_rank.label("text_rank"))
+            .where(search_vector.op("@@")(ts_query))
+            .order_by(text_rank.desc())
+            .limit(candidate_limit)
+        ).all()
+        for chunk, document_name, _ in lexical_rows:
+            if chunk.id not in candidate_map:
+                candidate_map[chunk.id] = (
+                    chunk,
+                    document_name,
+                    max(0.0, _cosine(query_embedding, chunk.embedding)),
+                )
+        candidates = list(candidate_map.values())
     else:
         rows = db.execute(base_query).all()
         candidates = [
@@ -223,19 +300,23 @@ async def search(
 
     searchable_contents = [f"{chunk.section_path}\n{chunk.content}" for chunk, _, _ in candidates]
     semantic_scores = [semantic for _, _, semantic in candidates]
-    bm25_scores = _bm25_scores(expanded_query, searchable_contents)
-    normalized_semantic = _minmax(semantic_scores)
-    normalized_bm25 = _minmax(bm25_scores)
+    original_bm25_scores = _bm25_scores(query, searchable_contents)
+    expanded_bm25_scores = _bm25_scores(expanded_query, searchable_contents)
+    ranked_semantic = _reciprocal_rank_scores(semantic_scores)
+    ranked_original_bm25 = _reciprocal_rank_scores(original_bm25_scores)
+    ranked_expanded_bm25 = _reciprocal_rank_scores(expanded_bm25_scores)
 
     for index, (chunk, document_name, semantic) in enumerate(candidates):
-        lexical = normalized_bm25[index]
+        coverage = _query_coverage(query, searchable_contents[index])
         filename_stem = re.sub(r"[^a-z0-9\u4e00-\u9fff]", "", document_name.rsplit(".", 1)[0].lower())
         compact_query = re.sub(r"[^a-z0-9\u4e00-\u9fff]", "", query.lower())
         filename_bonus = 0.35 if len(filename_stem) >= 3 and filename_stem in compact_query else 0.0
-        intent_bonus = _intent_bonus(query, chunk.content, chunk.page_number)
+        intent_bonus = _intent_bonus(query, chunk.content, chunk.page_number, chunk.section_path)
         score = (
-            normalized_semantic[index] * 0.62
-            + lexical * 0.28
+            ranked_semantic[index] * 0.58
+            + ranked_original_bm25[index] * 0.24
+            + ranked_expanded_bm25[index] * 0.08
+            + coverage * 0.12
             + filename_bonus
             + intent_bonus
             - _reference_penalty(chunk.content, chunk.page_number)
@@ -246,10 +327,12 @@ async def search(
                 document_name=document_name,
                 score=score,
                 semantic_score=semantic,
-                lexical_score=bm25_scores[index],
+                lexical_score=original_bm25_scores[index],
+                expanded_lexical_score=expanded_bm25_scores[index],
+                query_coverage=coverage,
             )
         )
     hits.sort(key=lambda hit: hit.score, reverse=True)
     elapsed_ms = round((perf_counter() - started) * 1000)
-    relevant_hits = [hit for hit in hits if _passes_relevance_gate(hit)]
+    relevant_hits = [hit for hit in hits if _passes_relevance_gate(hit, query)]
     return _select_diverse_hits(relevant_hits, top_k), elapsed_ms

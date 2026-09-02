@@ -53,6 +53,7 @@ class DocumentOut(BaseModel):
     status: str
     page_count: int
     chunk_count: int
+    needs_reindex: bool = False
     error_message: str | None
     created_at: datetime
 

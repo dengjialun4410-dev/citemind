@@ -12,7 +12,7 @@ import httpx
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from .auth import create_access_token, get_current_user, hash_password, verify_password
@@ -63,14 +63,23 @@ from .services.embeddings import get_embedder
 from .services.generation import generate_answer
 from .services.evaluation import run_retrieval_evaluation
 from .services.retrieval import search
+from .services.index_signature import current_index_signature
 from .services.research_workspace import build_comparison, build_reading_card
 from .services.translation import translate_to_chinese
-from .services.text_cleaning import clean_display_text
+from .services.text_cleaning import clean_display_text, clean_reader_text, is_reader_noise, is_reference_block
 from .tasks import process_document_task
 
 settings = get_settings()
 _metrics_lock = Lock()
 _request_metrics = {"count": 0, "errors": 0, "total_latency_ms": 0.0}
+
+
+def document_out(document: Document) -> DocumentOut:
+    needs_reindex = (
+        document.status == "ready"
+        and document.index_signature != current_index_signature(settings)
+    )
+    return DocumentOut.model_validate(document).model_copy(update={"needs_reindex": needs_reindex})
 
 
 def summarize_evidence_quality(hits: list) -> tuple[str, float]:
@@ -273,15 +282,16 @@ def list_documents(
     knowledge_base_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> list[Document]:
+) -> list[DocumentOut]:
     require_knowledge_base(db, knowledge_base_id, current_user)
-    return list(
+    documents = list(
         db.scalars(
             select(Document)
             .where(Document.knowledge_base_id == knowledge_base_id)
             .order_by(Document.created_at.desc())
         )
     )
+    return [document_out(document) for document in documents]
 
 
 @app.get("/api/documents/{document_id}/reading-card", response_model=ReadingCardOut)
@@ -313,10 +323,39 @@ def get_document_reader(
     if document.status != "ready":
         raise HTTPException(status_code=409, detail="文档尚未完成解析")
     chunks = db.scalars(select(Chunk).where(Chunk.document_id == document_id).order_by(Chunk.chunk_index))
-    return [
-        ReaderChunkOut(id=chunk.id, page_number=chunk.page_number, section=chunk.section_path, content=clean_display_text(chunk.content))
-        for chunk in chunks
-    ]
+    result: list[ReaderChunkOut] = []
+    in_references = False
+    seen_reader_units: set[str] = set()
+    for chunk in chunks:
+        if re.search(r"(?:^|\n)\s*references\s*(?:\n|$)", chunk.content, re.IGNORECASE):
+            in_references = True
+        if in_references:
+            continue
+        if is_reference_block(chunk.content):
+            continue
+        content = clean_reader_text(chunk.content)
+        if not content:
+            continue
+        unique_units: list[str] = []
+        for unit in content.splitlines():
+            fingerprint = re.sub(r"\W+", "", unit.lower())[:220]
+            if not fingerprint or fingerprint in seen_reader_units:
+                continue
+            seen_reader_units.add(fingerprint)
+            unique_units.append(unit)
+        content = "\n".join(unique_units)
+        if not content:
+            continue
+        section = "" if is_reader_noise(chunk.section_path) else clean_display_text(chunk.section_path, "")
+        result.append(
+            ReaderChunkOut(
+                id=chunk.id,
+                page_number=chunk.page_number,
+                section=section,
+                content=content,
+            )
+        )
+    return result
 
 
 @app.post("/api/translate", response_model=TranslationResponse)
@@ -367,7 +406,7 @@ async def upload_document(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> Document:
+) -> DocumentOut:
     require_knowledge_base(db, knowledge_base_id, current_user, write=True)
     original_name = safe_filename(file.filename or "document")
     extension = Path(original_name).suffix.lower()
@@ -404,7 +443,7 @@ async def upload_document(
     else:
         process_document_task.delay(document.id)
     db.refresh(document)
-    return document
+    return document_out(document)
 
 
 @app.delete("/api/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -428,7 +467,7 @@ async def reindex_document(
     document_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> Document:
+) -> DocumentOut:
     document = db.get(Document, document_id)
     if not document:
         raise HTTPException(status_code=404, detail="文档不存在")
@@ -443,7 +482,7 @@ async def reindex_document(
     else:
         process_document_task.delay(document.id)
     db.refresh(document)
-    return document
+    return document_out(document)
 
 
 @app.post("/api/knowledge-bases/{knowledge_base_id}/chat", response_model=ChatResponse)
@@ -454,13 +493,27 @@ async def chat(
     current_user: User = Depends(get_current_user),
 ) -> ChatResponse:
     knowledge_base = require_knowledge_base(db, knowledge_base_id, current_user)
+    index_signature = current_index_signature(settings)
     ready_count = db.scalar(
         select(func.count(Document.id)).where(
             Document.knowledge_base_id == knowledge_base_id,
             Document.status == "ready",
+            Document.index_signature == index_signature,
         )
     )
     if not ready_count:
+        stale_count = db.scalar(
+            select(func.count(Document.id)).where(
+                Document.knowledge_base_id == knowledge_base_id,
+                Document.status == "ready",
+                or_(Document.index_signature.is_(None), Document.index_signature != index_signature),
+            )
+        )
+        if stale_count:
+            raise HTTPException(
+                status_code=409,
+                detail="文档索引由旧 Embedding 模型生成，请在右侧选择文档并点击“重建索引”后再提问",
+            )
         raise HTTPException(status_code=400, detail="请先上传并成功解析至少一篇文档")
 
     conversation = db.get(Conversation, payload.conversation_id) if payload.conversation_id else None
@@ -479,11 +532,15 @@ async def chat(
                     Document.knowledge_base_id == knowledge_base_id,
                     Document.id.in_(payload.document_ids),
                     Document.status == "ready",
+                    Document.index_signature == index_signature,
                 )
             )
         )
         if valid_document_ids != set(payload.document_ids):
-            raise HTTPException(status_code=400, detail="检索范围包含不存在或尚未就绪的文档")
+            raise HTTPException(
+                status_code=409,
+                detail="所选文档尚未就绪或索引版本已过期，请先点击“重建索引”",
+            )
     hits, retrieval_ms = await search(
         db,
         knowledge_base_id,

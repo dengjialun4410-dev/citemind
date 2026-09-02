@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     embedding_base_url: str = ""
     embedding_api_key: str = ""
     retrieval_candidate_k: int = 40
+    pgvector_hnsw_ef_search: int = 80
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/1"
     celery_task_always_eager: bool = True

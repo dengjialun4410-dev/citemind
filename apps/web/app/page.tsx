@@ -23,7 +23,13 @@ const confidenceLabel = {
 };
 
 function splitSentences(text: string) {
-  return text.match(/[^.!?。！？]+[.!?。！？]+|[^.!?。！？]+$/g)?.map((item) => item.trim()).filter((item) => item.length > 1) ?? [text];
+  const protectedText = text
+    .replace(/\be\.g\./gi, (value) => value.replaceAll(".", "<dot>"))
+    .replace(/\bi\.e\./gi, (value) => value.replaceAll(".", "<dot>"))
+    .replace(/\bet al\./gi, (value) => value.replace(".", "<dot>"));
+  return protectedText.match(/[^.!?。！？]+[.!?。！？]+|[^.!?。！？]+$/g)
+    ?.map((item) => item.replaceAll("<dot>", ".").trim())
+    .filter((item) => item.length > 1) ?? [text];
 }
 
 function getConfidence(result: ChatResult) {
@@ -32,6 +38,50 @@ function getConfidence(result: ChatResult) {
 
 function getEvidenceCoverage(result: ChatResult) {
   return Number.isFinite(result.evidence_coverage) ? result.evidence_coverage : 0;
+}
+
+type BrowserTranslator = { translate: (text: string) => Promise<string> };
+type BrowserTranslatorApi = {
+  availability?: (options: { sourceLanguage: string; targetLanguage: string }) => Promise<string>;
+  create: (options: { sourceLanguage: string; targetLanguage: string; monitor?: (monitor: EventTarget) => void }) => Promise<BrowserTranslator>;
+};
+
+async function translateWithoutKey(text: string): Promise<{ translated_text: string; mode: string } | null> {
+  const source = text.trim();
+  if (!source) return { translated_text: "", mode: "local" };
+  const chineseCount = source.match(/[\u4e00-\u9fff]/g)?.length ?? 0;
+  const latinCount = source.match(/[A-Za-z]/g)?.length ?? 0;
+  if (chineseCount > latinCount) return { translated_text: source, mode: "local" };
+
+  const translatorApi = (window as typeof window & { Translator?: BrowserTranslatorApi }).Translator;
+  if (translatorApi) {
+    try {
+      const options = { sourceLanguage: "en", targetLanguage: "zh" };
+      const availability = await translatorApi.availability?.(options);
+      if (availability === "available" || availability === undefined) {
+        const translator = await Promise.race([
+          translatorApi.create(options),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("browser translator timeout")), 5000)),
+        ]);
+        const translated = (await Promise.race([
+          translator.translate(source),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("translation timeout")), 8000)),
+        ])).trim();
+        if (translated && translated !== source) return { translated_text: translated, mode: "browser-local" };
+      }
+    } catch { /* Continue with public no-key services. */ }
+  }
+
+  try {
+    const params = new URLSearchParams({ client: "gtx", sl: "auto", tl: "zh-CN", dt: "t", q: source });
+    const response = await fetch(`https://translate.googleapis.com/translate_a/single?${params}`, { signal: AbortSignal.timeout(12000) });
+    if (response.ok) {
+      const payload = await response.json() as [Array<[string]>];
+      const translated = payload[0].map((segment) => segment[0]).join("").trim();
+      if (translated) return { translated_text: translated, mode: "google-browser" };
+    }
+  } catch { /* The API proxy remains the final fallback. */ }
+  return null;
 }
 
 export default function Home() {
@@ -65,6 +115,7 @@ export default function Home() {
   const [researchBusy, setResearchBusy] = useState(false);
   const [reader, setReader] = useState<{ name: string; chunks: ReaderChunk[] } | null>(null);
   const [translations, setTranslations] = useState<Record<string, string>>({});
+  const [translationModes, setTranslationModes] = useState<Record<string, string>>({});
   const [translating, setTranslating] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -89,7 +140,9 @@ export default function Home() {
       setSelectedDocumentId((current) => {
         if (current === "all") return current;
         if (typeof current === "number" && items.some((item) => item.id === current && item.status === "ready")) return current;
-        return items.find((item) => item.status === "ready")?.id ?? null;
+        return items.find((item) => item.status === "ready" && !item.needs_reindex)?.id
+          ?? items.find((item) => item.status === "ready")?.id
+          ?? null;
       });
     }).catch((err: Error) => setError(err.message));
     api.listEvaluationDatasets(activeId).then(setEvaluationDatasets).catch(() => setEvaluationDatasets([]));
@@ -103,7 +156,10 @@ export default function Home() {
     const timer = window.setInterval(() => {
       api.listDocuments(activeId).then((items) => {
         setDocuments(items);
-        setSelectedDocumentId((current) => current ?? items.find((item) => item.status === "ready")?.id ?? null);
+        setSelectedDocumentId((current) => current
+          ?? items.find((item) => item.status === "ready" && !item.needs_reindex)?.id
+          ?? items.find((item) => item.status === "ready")?.id
+          ?? null);
       }).catch(() => undefined);
     }, 1800);
     return () => window.clearInterval(timer);
@@ -271,15 +327,32 @@ export default function Home() {
   }
 
   async function translateSentence(sentence: string) {
-    if (translations[sentence] || translating) return;
+    if ((translations[sentence] && translationModes[sentence] !== "unavailable") || translating) return;
     setTranslating(sentence);
-    try { const result = await api.translate(sentence); setTranslations((items) => ({ ...items, [sentence]: result.translated_text })); }
-    catch (err) { setTranslations((items) => ({ ...items, [sentence]: err instanceof Error ? err.message : "翻译失败" })); }
+    try {
+      const result = await translateWithoutKey(sentence) ?? await api.translate(sentence);
+      setTranslations((items) => ({ ...items, [sentence]: result.translated_text }));
+      setTranslationModes((items) => ({ ...items, [sentence]: result.mode }));
+    }
+    catch (err) {
+      setTranslations((items) => ({ ...items, [sentence]: err instanceof Error ? err.message : "翻译失败" }));
+      setTranslationModes((items) => ({ ...items, [sentence]: "unavailable" }));
+    }
     finally { setTranslating(null); }
   }
 
+  function renderSentenceTranslation(sentence: string) {
+    if (translating === sentence) return <p className="sentence-translation">正在翻译…</p>;
+    if (!translations[sentence]) return null;
+    if (translationModes[sentence] === "unavailable") {
+      const fallbackUrl = `https://translate.google.com/?sl=auto&tl=zh-CN&text=${encodeURIComponent(sentence)}&op=translate`;
+      return <p className="sentence-translation translation-error">{translations[sentence]} <button type="button" onClick={() => void translateSentence(sentence)}>重试</button><a href={fallbackUrl} target="_blank" rel="noreferrer">在 Google 翻译中打开</a></p>;
+    }
+    return <p className="sentence-translation">中文：{translations[sentence]}</p>;
+  }
+
   function renderTranslatableText(text: string, keyPrefix: string) {
-    return <div className="translatable-text">{splitSentences(text).map((sentence, index) => <div key={`${keyPrefix}-${index}`}><button type="button" className="inline-sentence" onClick={() => void translateSentence(sentence)}>{sentence}</button>{translations[sentence] && <p className="sentence-translation">中文：{translations[sentence]}</p>}{translating === sentence && <p className="sentence-translation">正在翻译…</p>}</div>)}</div>;
+    return <div className="translatable-text">{splitSentences(text).map((sentence, index) => <div key={`${keyPrefix}-${index}`}><button type="button" className="inline-sentence" onClick={() => void translateSentence(sentence)}>{sentence}</button>{renderSentenceTranslation(sentence)}</div>)}</div>;
   }
 
   function submit(event: FormEvent) {
@@ -363,7 +436,7 @@ export default function Home() {
                       <div className="message-body">
                         <div className="message-meta">{message.role === "user" ? "你的问题" : "CiteMind"}</div>
                         {message.role === "assistant" && !message.content ? <div className="thinking"><i /><i /><i />正在流式生成</div> : message.role === "assistant" ? renderTranslatableText(message.content, `answer-${index}`) : <p>{message.content}</p>}
-                        {message.result && <div className="answer-meta"><span><CheckIcon /> 已核对 {message.result.citations.length} 条证据</span><span>语义 + BM25 · {message.result.retrieval_ms} ms</span><span className={`confidence ${getConfidence(message.result)}`}>{confidenceLabel[getConfidence(message.result)]} · {(getEvidenceCoverage(message.result) * 100).toFixed(0)}%</span><span>{message.result.generation_mode === "remote-llm" ? "模型综合" : message.result.generation_mode === "local-fallback" ? "模型降级" : "本地摘要"}</span></div>}
+                        {message.result && <div className="answer-meta"><span><CheckIcon /> 已核对 {message.result.citations.length} 条证据</span><span>语义 + BM25 · {message.result.retrieval_ms} ms</span><span className={`confidence ${getConfidence(message.result)}`}>{confidenceLabel[getConfidence(message.result)]} · {(getEvidenceCoverage(message.result) * 100).toFixed(0)}%</span><span>{message.result.generation_mode === "remote-llm" ? "模型综合" : message.result.generation_mode === "local-fallback" ? "模型降级" : message.result.generation_mode === "relevance-rejection" ? "超出知识库范围" : "本地摘要"}</span></div>}
                         {message.result?.citations.map((citation, citationIndex) => (
                           <details className="citation" key={citation.chunk_id}>
                             <summary><QuoteIcon /><span>[{citationIndex + 1}] {citation.document_name}</span><b>相关度 {Math.round(Math.min(1, citation.score) * 100)}% · 第 {citation.page_number} 页</b></summary>
@@ -393,12 +466,12 @@ export default function Home() {
             </button>
             <input ref={fileInput} type="file" accept=".pdf,.docx,.md,.txt" onChange={onFile} hidden />
             {error && <div className="error-banner">{error}</div>}
-            {documents.length > 0 && <div className="scope-row"><span>检索范围</span><div className="scope-actions"><button className={selectedDocumentId === "all" ? "active" : ""} onClick={() => setSelectedDocumentId("all")}>全部文档</button>{typeof selectedDocumentId === "number" && <button onClick={() => void reindexSelectedDocument()} disabled={Boolean(reindexingId)}>{reindexingId ? "索引中…" : "重建索引"}</button>}</div></div>}
+            {documents.length > 0 && <div className="scope-row"><span>检索范围</span><div className="scope-actions"><button className={selectedDocumentId === "all" ? "active" : ""} onClick={() => setSelectedDocumentId("all")}>全部文档</button>{typeof selectedDocumentId === "number" && <button onClick={() => void reindexSelectedDocument()} disabled={Boolean(reindexingId)}>{reindexingId ? "索引中…" : documents.find((item) => item.id === selectedDocumentId)?.needs_reindex ? "需要重建索引" : "重建索引"}</button>}</div></div>}
             <div className="document-list">
               {documents.length === 0 ? <div className="empty-docs"><FileIcon /><p>知识库还是空的</p><small>上传第一篇文档后即可开始提问</small></div> : documents.map((doc) => (
                 <button type="button" className={`document-card ${selectedDocumentId === doc.id ? "selected" : ""}`} key={doc.id} onClick={() => doc.status === "ready" && setSelectedDocumentId(doc.id)} disabled={doc.status !== "ready"}>
                   <div className={`file-type ${doc.file_type}`}>{doc.file_type.toUpperCase()}</div>
-                  <div className="file-info"><strong title={doc.name}>{doc.name}</strong><small>{doc.page_count} 页 · {doc.chunk_count} 个证据块</small><span className={`status ${doc.status}`}><i />{doc.status === "ready" ? "索引就绪" : doc.status === "failed" ? "解析失败" : "处理中"}</span></div>
+                  <div className="file-info"><strong title={doc.name}>{doc.name}</strong><small>{doc.page_count} 页 · {doc.chunk_count} 个证据块</small><span className={`status ${doc.needs_reindex ? "stale" : doc.status}`}><i />{doc.needs_reindex ? "索引需更新" : doc.status === "ready" ? "索引就绪" : doc.status === "failed" ? "解析失败" : "处理中"}</span></div>
                 </button>
               ))}
             </div>
@@ -410,7 +483,7 @@ export default function Home() {
       {readingCard && <div className="research-modal" role="dialog" aria-modal="true" aria-label="论文阅读卡"><div className="modal-backdrop" onClick={() => setReadingCard(null)} /><section className="research-sheet reading-sheet"><button className="modal-close" onClick={() => setReadingCard(null)} aria-label="关闭">×</button><p className="eyebrow accent">PAPER READING CARD</p><h2>{readingCard.document_name}</h2><div className="reading-overview">{renderTranslatableText(readingCard.overview, "card-overview")}</div><div className="reading-grid">{[["研究问题", readingCard.research_question], ["核心方法", readingCard.method], ["数据集与指标", readingCard.datasets_and_metrics], ["主要发现", readingCard.findings], ["局限与未来工作", readingCard.limitations]].map(([label, value]) => <article key={label}><h3>{label}</h3>{renderTranslatableText(value, `card-${label}`)}</article>)}</div><div className="evidence-strip"><strong>证据锚点</strong>{readingCard.evidence.map((item, index) => <details key={`${item.page_number}-${index}`}><summary>第 {item.page_number} 页 {item.section && `· ${item.section}`}</summary>{renderTranslatableText(item.quote, `card-evidence-${index}`)}</details>)}</div></section></div>}
       {compareOpen && <div className="research-modal" role="dialog" aria-modal="true" aria-label="选择对比文献"><div className="modal-backdrop" onClick={() => setCompareOpen(false)} /><section className="research-sheet compare-picker"><button className="modal-close" onClick={() => setCompareOpen(false)} aria-label="关闭">×</button><p className="eyebrow accent">COMPARE PAPERS</p><h2>选择 2–5 篇论文</h2><p>系统将从各论文原文证据中抽取相同维度，生成可核查对比表。</p><div className="compare-options">{documents.filter((doc) => doc.status === "ready").map((doc) => <label key={doc.id}><input type="checkbox" checked={compareIds.includes(doc.id)} onChange={() => toggleCompareDocument(doc.id)} /> <span>{doc.name}</span><small>{doc.page_count} 页 · {doc.chunk_count} 个证据块</small></label>)}</div><button className="modal-primary" disabled={compareIds.length < 2 || researchBusy} onClick={() => void buildComparison()}>{researchBusy ? "正在构建…" : `生成对比表（${compareIds.length} 篇）`}</button></section></div>}
       {comparison && <div className="research-modal" role="dialog" aria-modal="true" aria-label="多文献对比表"><div className="modal-backdrop" onClick={() => setComparison(null)} /><section className="research-sheet comparison-sheet"><button className="modal-close" onClick={() => setComparison(null)} aria-label="关闭">×</button><p className="eyebrow accent">EVIDENCE-GROUNDED COMPARISON</p><h2>多文献对比表</h2><div className="comparison-table" style={{ "--document-count": comparison.document_names.length } as CSSProperties}><div className="comparison-row comparison-head"><strong>对比维度</strong>{comparison.document_names.map((name) => <strong key={name}>{name}</strong>)}</div>{comparison.rows.map((row) => <div className="comparison-row" key={row.label}><b>{row.label}</b>{row.values.map((value, index) => <div key={`${row.label}-${index}`}>{renderTranslatableText(value, `comparison-${row.label}-${index}`)}</div>)}</div>)}</div><p className="comparison-note">每一列均从对应论文的原文证据块抽取；请结合页码证据进一步核查关键结论。</p></section></div>}
-      {reader && <div className="research-modal" role="dialog" aria-modal="true" aria-label="原文逐句翻译"><div className="modal-backdrop" onClick={() => setReader(null)} /><section className="research-sheet reader-sheet"><button className="modal-close" onClick={() => setReader(null)} aria-label="关闭">×</button><p className="eyebrow accent">CLICK-TO-TRANSLATE READER</p><h2>{reader.name}</h2><p className="reader-tip">点击任意英文句子，即可在原文下方显示中文译文。</p>{reader.chunks.map((chunk) => <article className="reader-chunk" key={chunk.id}><small>第 {chunk.page_number} 页 {chunk.section && `· ${chunk.section}`}</small>{splitSentences(chunk.content).map((sentence, index) => <div key={`${chunk.id}-${index}`}><button className="sentence-button" onClick={() => void translateSentence(sentence)}>{sentence}</button>{translations[sentence] && <p className="sentence-translation">中文：{translations[sentence]}</p>}{translating === sentence && <p className="sentence-translation">正在翻译…</p>}</div>)}</article>)}</section></div>}
+      {reader && <div className="research-modal" role="dialog" aria-modal="true" aria-label="原文逐句翻译"><div className="modal-backdrop" onClick={() => setReader(null)} /><section className="research-sheet reader-sheet"><button className="modal-close" onClick={() => setReader(null)} aria-label="关闭">×</button><p className="eyebrow accent">CLICK-TO-TRANSLATE READER</p><h2>{reader.name}</h2><p className="reader-tip">点击任意英文句子，即可在原文下方显示中文译文。</p>{reader.chunks.map((chunk) => <article className="reader-chunk" key={chunk.id}><small>第 {chunk.page_number} 页 {chunk.section && `· ${chunk.section}`}</small>{splitSentences(chunk.content).map((sentence, index) => <div key={`${chunk.id}-${index}`}><button className="sentence-button" onClick={() => void translateSentence(sentence)}>{sentence}</button>{renderSentenceTranslation(sentence)}</div>)}</article>)}</section></div>}
     </main>
   );
 }

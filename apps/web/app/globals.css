@@ -157,7 +157,7 @@ svg { width: 20px; height: 20px; }
 .file-info small { color: #929a96; font-size: 8px; }
 .status { display: flex; align-items: center; gap: 4px; margin-top: 2px; color: var(--green-2); font-size: 8px; }
 .status i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
-.status.failed { color: #a84d40; }.status.processing { color: var(--amber); }
+  .status.failed { color: #a84d40; }.status.processing, .status.stale { color: var(--amber); }
 .quality-card { margin-top: 24px; padding: 13px; border-radius: 11px; background: var(--green); color: white; }
 .quality-card > div:first-child { display: flex; align-items: center; gap: 9px; }
 .quality-card svg { width: 15px; color: var(--lime); }
@@ -202,6 +202,8 @@ svg { width: 20px; height: 20px; }
 .reader-chunk { margin-top: 10px; padding: 13px; border: 1px solid var(--line); border-radius: 10px; background: white; }.reader-chunk > small { display: block; margin-bottom: 7px; color: var(--green-2); font-size: 9px; font-weight: 700; }
 .sentence-button { width: 100%; padding: 5px 7px; border: 0; border-radius: 5px; background: transparent; color: #49554e; text-align: left; font: inherit; font-size: 12px; line-height: 1.7; cursor: pointer; }.sentence-button:hover { background: #eef5e9; color: var(--green); }
 .sentence-translation { margin: 2px 7px 7px; padding: 7px 9px; border-left: 2px solid var(--lime); background: #f4f7f1; color: #3f694f; font-size: 11px; line-height: 1.65; }
+.translation-error { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; border-left-color: #d8a34d; color: #76531f; }
+.translation-error button, .translation-error a { border: 0; padding: 2px 7px; border-radius: 5px; background: #e9efcf; color: #315b45; font: inherit; font-weight: 700; text-decoration: none; cursor: pointer; }
 .inline-sentence { display: inline; padding: 1px 2px; border: 0; border-radius: 4px; background: transparent; color: inherit; text-align: left; font: inherit; cursor: pointer; }.inline-sentence:hover { background: #e8f2e6; color: var(--green); }
 .translatable-text { color: inherit; font-size: inherit; line-height: inherit; }.translatable-text > div { display: inline; }
 .evidence-strip .inline-sentence { color: rgba(255,255,255,.78); }.evidence-strip .inline-sentence:hover { color: white; background: rgba(220,233,154,.16); }.evidence-strip .sentence-translation { color: #24523e; background: rgba(255,255,255,.9); }

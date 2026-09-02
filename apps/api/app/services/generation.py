@@ -142,6 +142,40 @@ def _summary_answer(hits: list[SearchHit]) -> str:
     proposal = select(("we propose", "we present", "we develop", "to address this gap", "to address these issues", "introduce"))
     result = select(("achieves", "outperform", "results demonstrate", "experiments show"))
     if not problem or not proposal:
+        # Supplementary files often omit the abstract/problem statement but
+        # contain a compact overview of the complete method.  Present that
+        # evidence with an explicit boundary instead of returning an unrelated
+        # method fragment as if it answered the full-paper question.
+        for citation, hit in enumerate(hits[:5], start=1):
+            lowered = hit.chunk.content.lower()
+            if "supplementary overview" not in lowered and "method overview" not in lowered:
+                continue
+            overview_sentences = [
+                sentence.strip()
+                for sentence in re.split(r"(?<=[.!?])\s+|\n+", hit.chunk.content)
+                if 35 <= len(sentence.strip()) <= 650
+            ]
+            positioning = next(
+                (sentence for sentence in overview_sentences if " treats " in f" {sentence.lower()} " or "we propose" in sentence.lower()),
+                None,
+            )
+            procedure = [
+                sentence
+                for sentence in overview_sentences
+                if any(signal in sentence.lower() for signal in ("normalizes", "constructs", "computes", "vectorizes", "injects"))
+            ][:2]
+            if positioning or procedure:
+                sections = [
+                    "研究问题\n- 当前上传文件是 Supplementary Material；现有证据没有明确给出主论文的问题陈述，不能据此替作者推断。",
+                ]
+                if positioning:
+                    sections.append(f"核心定位\n- {positioning[:460]} [{citation}]")
+                if procedure:
+                    sections.append(
+                        "主要方法\n" + "\n".join(f"- {sentence[:460]} [{citation}]" for sentence in procedure)
+                    )
+                sections.append("贡献边界\n- 补充材料给出了方法实现与分析细节；若要完整总结创新点和实验结论，请上传主论文正文。")
+                return "\n\n".join(sections) + "\n\n以上内容仅基于当前文档中的明确证据。"
         return ""
 
     lines = [
@@ -180,16 +214,16 @@ def _local_answer(question: str, hits: list[SearchHit]) -> str:
     dataset_intent = any(term in question for term in ("数据集", "评价指标", "评估指标", "实验指标"))
     if dataset_intent:
         return _dataset_answer(hits)
-    method_intent = any(term in question for term in ("方法", "模型", "模块", "架构", "结构", "怎么做"))
-    if method_intent:
-        structured_method = _method_answer(hits)
-        if structured_method:
-            return structured_method
     summary_intent = any(term in question for term in ("贡献", "创新", "研究问题", "核心问题", "总结", "讲了什么"))
     if summary_intent:
         structured_summary = _summary_answer(hits)
         if structured_summary:
             return structured_summary
+    method_intent = any(term in question for term in ("方法", "模型", "模块", "架构", "结构", "怎么做"))
+    if method_intent:
+        structured_method = _method_answer(hits)
+        if structured_method:
+            return structured_method
     for number, hit in enumerate(hits[:3], start=1):
         excerpt = _best_excerpt(question, hit)
         if excerpt and excerpt not in seen:
@@ -200,6 +234,15 @@ def _local_answer(question: str, hits: list[SearchHit]) -> str:
 
 
 async def generate_answer(question: str, hits: list[SearchHit], settings: Settings) -> tuple[str, str]:
+    if not hits:
+        return (
+            "这个问题与当前知识库中已上传的文献没有足够关联，因此我不会使用不相关内容拼凑答案。\n\n"
+            "你可以：\n"
+            "- 改问论文的方法、数据集、实验结果、创新点或局限性；\n"
+            "- 选择另一篇目标文档；\n"
+            "- 上传包含该主题的文献后再提问。",
+            "relevance-rejection",
+        )
     if not settings.openai_api_key:
         return _local_answer(question, hits), "local-extractive"
 

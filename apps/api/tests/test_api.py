@@ -1,7 +1,8 @@
 from fastapi.testclient import TestClient
 
-from app.database import Base, engine
+from app.database import Base, SessionLocal, engine
 from app.main import app
+from app.models import Document
 from app.services.retrieval import expand_query
 
 
@@ -42,6 +43,7 @@ def test_end_to_end_document_chat_and_evaluation() -> None:
         )
         assert upload.status_code == 202
         assert upload.json()["status"] == "ready"
+        assert upload.json()["needs_reindex"] is False
         assert upload.json()["chunk_count"] >= 1
         document_id = upload.json()["id"]
 
@@ -68,7 +70,7 @@ def test_end_to_end_document_chat_and_evaluation() -> None:
 
         translation = client.post("/api/translate", headers=headers, json={"text": "Transformer uses self-attention."})
         assert translation.status_code == 200
-        assert translation.json()["mode"] in {"google-free", "unavailable"}
+        assert translation.json()["mode"] in {"google-free", "mymemory-free", "unavailable"}
 
         comparison = client.post(
             f"/api/knowledge-bases/{knowledge_base_id}/document-comparison",
@@ -92,6 +94,16 @@ def test_end_to_end_document_chat_and_evaluation() -> None:
         assert body["generation_mode"] == "local-extractive"
         assert body["confidence"] in {"high", "medium", "low"}
         assert 0 <= body["evidence_coverage"] <= 1
+
+        unrelated = client.post(
+            f"/api/knowledge-bases/{knowledge_base_id}/chat",
+            headers=headers,
+            json={"question": "请告诉我今天北京的天气", "document_ids": [document_id]},
+        )
+        assert unrelated.status_code == 200
+        assert unrelated.json()["citations"] == []
+        assert unrelated.json()["generation_mode"] == "relevance-rejection"
+        assert "与当前知识库" in unrelated.json()["answer"]
 
         with client.stream(
             "POST",
@@ -130,6 +142,25 @@ def test_end_to_end_document_chat_and_evaluation() -> None:
         assert run.status_code == 200
         assert run.json()["recall_at_k"] == 1.0
         assert run.json()["mrr"] == 1.0
+
+        with SessionLocal() as db:
+            stale_document = db.get(Document, document_id)
+            assert stale_document is not None
+            stale_document.index_signature = None
+            db.commit()
+        listed = client.get(f"/api/knowledge-bases/{knowledge_base_id}/documents", headers=headers)
+        listed_document = next(item for item in listed.json() if item["id"] == document_id)
+        assert listed_document["needs_reindex"] is True
+        stale_chat = client.post(
+            f"/api/knowledge-bases/{knowledge_base_id}/chat",
+            headers=headers,
+            json={"question": "Transformer 使用什么机制？", "document_ids": [document_id]},
+        )
+        assert stale_chat.status_code == 409
+        assert "重建索引" in stale_chat.json()["detail"]
+        refreshed = client.post(f"/api/documents/{document_id}/reindex", headers=headers)
+        assert refreshed.status_code == 202
+        assert refreshed.json()["needs_reindex"] is False
 
 
 def test_auth_and_permissions() -> None:
