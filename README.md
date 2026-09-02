@@ -107,17 +107,25 @@ pnpm install
 pnpm dev
 ```
 
-Windows 已完成一次依赖安装后，可在项目根目录一键启动，无需手动输入 `pnpm`：
+Windows 已完成一次依赖安装后，直接双击项目根目录的 `start.cmd`，程序会自动启动并打开网页。关闭或重启时分别双击 `stop.cmd`、`restart.cmd`。
+
+也可以在 PowerShell 中使用三个简短命令：
 
 ```powershell
 cd C:\Users\Lun\Documents\项目
-.\scripts\dev.ps1
+.\start.cmd
 ```
 
 关闭服务：
 
 ```powershell
-.\scripts\stop-dev.ps1
+.\stop.cmd
+```
+
+重新启动：
+
+```powershell
+.\restart.cmd
 ```
 
 如果模型或正文清洗规则升级，网页会把旧文档标记为“索引需更新”；点击该文档右侧的“重建索引”即可。免密钥翻译依赖 Google/MyMemory 的公网服务，网络不可达时页面会提供“重试”和“在 Google 翻译中打开”的降级入口。

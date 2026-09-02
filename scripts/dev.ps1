@@ -5,8 +5,31 @@ $webRoot = Join-Path $projectRoot "apps\web"
 $pythonExe = Join-Path $apiRoot ".venv\Scripts\python.exe"
 $pidFile = Join-Path $projectRoot ".dev-pids.json"
 
+function Test-CiteMindUrl([string]$url) {
+    try {
+        Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 2 | Out-Null
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+$apiAlreadyRunning = Test-CiteMindUrl "http://127.0.0.1:8000/health"
+$webAlreadyRunning = Test-CiteMindUrl "http://127.0.0.1:3000"
+if ($apiAlreadyRunning -and $webAlreadyRunning) {
+    Write-Output "CiteMind is already running:"
+    Write-Output "  Web: http://127.0.0.1:3000"
+    Write-Output "  API: http://127.0.0.1:8000/docs"
+    exit 0
+}
+
 if (Test-Path -LiteralPath $pidFile) {
-    throw "A development PID file already exists. Run scripts/stop-dev.ps1 first."
+    $savedPids = Get-Content -Raw -LiteralPath $pidFile | ConvertFrom-Json
+    $hasLiveProcess = @($savedPids.api, $savedPids.web) | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }
+    if ($hasLiveProcess) {
+        throw "CiteMind is only partially running. Run .\stop.cmd and then .\start.cmd."
+    }
+    Remove-Item -LiteralPath $pidFile
 }
 if (-not (Test-Path -LiteralPath $pythonExe)) {
     throw "Backend virtual environment not found. Follow README.md local setup first."
