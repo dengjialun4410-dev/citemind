@@ -61,7 +61,7 @@ def test_end_to_end_document_chat_and_evaluation() -> None:
 
         reading_card = client.get(f"/api/documents/{document_id}/reading-card", headers=headers)
         assert reading_card.status_code == 200
-        assert reading_card.json()["document_name"] == "transformer.md"
+        assert reading_card.json()["document_name"] == "Transformer"
         assert reading_card.json()["method"]
 
         reader = client.get(f"/api/documents/{document_id}/reader", headers=headers)
@@ -89,8 +89,8 @@ def test_end_to_end_document_chat_and_evaluation() -> None:
         assert answer.status_code == 200
         body = answer.json()
         assert body["citations"]
-        assert body["citations"][0]["document_name"] == "transformer.md"
-        assert {citation["document_name"] for citation in body["citations"]} == {"transformer.md"}
+        assert body["citations"][0]["document_name"] == "Transformer"
+        assert {citation["document_name"] for citation in body["citations"]} == {"Transformer"}
         assert body["generation_mode"] == "local-extractive"
         assert body["confidence"] in {"high", "medium", "low"}
         assert 0 <= body["evidence_coverage"] <= 1

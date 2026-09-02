@@ -1,6 +1,6 @@
 from app.main import cited_evidence_window
 from app.models import Chunk
-from app.services.document_parser import PageText, _strip_repeated_margins, chunk_pages
+from app.services.document_parser import PageText, _strip_repeated_margins, chunk_pages, extract_document_title
 from app.services.generation import _dataset_answer, _definition_answer, _method_answer
 from app.services.retrieval import (
     SearchHit,
@@ -52,6 +52,18 @@ def test_chunking_keeps_overlap_on_complete_units() -> None:
     assert len(chunks) >= 2
     assert all(len(chunk.content) <= 90 for chunk in chunks)
     assert not chunks[1].content.startswith("plete")
+
+
+def test_extracts_multiline_paper_title_instead_of_filename() -> None:
+    pages = [PageText(1, "SCD-Net: Spatiotemporal Clues Disentanglement Network for\nSelf-Supervised Skeleton-Based Action Recognition\nCong Wu1, Xiao-Jun Wu2\nSchool of Computer Science, Example University\nAbstract\nBody text.")]
+    assert extract_document_title(pages, "06602-AAAI24.WuC.pdf") == (
+        "SCD-Net: Spatiotemporal Clues Disentanglement Network for Self-Supervised Skeleton-Based Action Recognition"
+    )
+
+
+def test_supplement_uses_content_acronym_as_title() -> None:
+    pages = [PageText(1, "Supplementary Material\nAnonymous submission\nSupplementary Overview\nTD-GCN treats persistent topology as guidance.")]
+    assert extract_document_title(pages, "AAAI27.pdf") == "TD-GCN Supplementary Material"
 
 
 def test_dataset_answer_is_structured_and_grounded() -> None:

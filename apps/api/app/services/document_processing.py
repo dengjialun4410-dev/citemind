@@ -6,7 +6,7 @@ from sqlalchemy import delete
 from ..config import get_settings
 from ..database import SessionLocal
 from ..models import Chunk, Document
-from .document_parser import chunk_pages, extract_pages
+from .document_parser import chunk_pages, extract_document_title, extract_pages
 from .embeddings import get_embedder
 from .index_signature import current_index_signature
 
@@ -23,6 +23,7 @@ async def process_document(document_id: int) -> None:
         try:
             path = Path(document.file_path)
             pages = extract_pages(path.read_bytes(), f".{document.file_type}")
+            document.name = extract_document_title(pages, document.name)
             parsed_chunks = chunk_pages(pages, settings.chunk_size, settings.chunk_overlap)
             if not parsed_chunks:
                 raise ValueError("未能从文档中提取有效文本")

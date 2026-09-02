@@ -24,6 +24,80 @@ class ParsedChunk:
     chunk_index: int
 
 
+def _looks_like_author_metadata(line: str, title_started: bool) -> bool:
+    value = re.sub(r"\s+", " ", line).strip()
+    lowered = value.lower()
+    if not value:
+        return False
+    if "@" in value or "anonymous submission" in lowered:
+        return True
+    if re.search(r"\b(?:school|department|faculty|institute|laboratory) of\b|\buniversity\b", lowered):
+        return True
+    name_pairs = len(re.findall(r"\b[A-Z][A-Za-z'-]+\s+[A-Z][A-Za-z'.-]+\d*", value))
+    if name_pairs >= 2 and (value.count(",") >= 1 or re.search(r"\d", value)):
+        return True
+    if title_started and name_pairs == 1 and len(value.split()) <= 5 and not re.search(r"[:?!]", value):
+        return True
+    return False
+
+
+def extract_document_title(pages: list[PageText], fallback_name: str) -> str:
+    """Extract a human-readable paper title from the first page.
+
+    The filename is retained only when the document does not expose a reliable
+    title, such as some detached supplementary-material PDFs.
+    """
+    if not pages:
+        return fallback_name
+    markdown_heading = next(
+        (re.sub(r"^#{1,6}\s*", "", line.strip()) for line in pages[0].text.splitlines() if re.match(r"^#{1,6}\s+", line.strip())),
+        None,
+    )
+    if markdown_heading:
+        return markdown_heading[:255]
+    lines = [re.sub(r"\s+", " ", line).strip().lstrip("# ") for line in pages[0].text.splitlines()]
+    lines = [line for line in lines if line]
+    if not lines:
+        return fallback_name
+
+    first_lines = " ".join(lines[:4]).lower()
+    if "supplementary material" in first_lines:
+        acronym = next(
+            (
+                match.group(0)
+                for line in lines[1:10]
+                for match in [re.search(r"\b[A-Z][A-Z0-9]*-[A-Z0-9-]{2,}\b", line)]
+                if match
+            ),
+            None,
+        )
+        return f"{acronym} Supplementary Material" if acronym else fallback_name
+
+    title_lines: list[str] = []
+    for line in lines[:14]:
+        lowered = line.lower().strip(": ")
+        if lowered in {"abstract", "摘要", "keywords", "key words"}:
+            break
+        if _looks_like_author_metadata(line, bool(title_lines)):
+            if title_lines:
+                break
+            continue
+        if len(line) > 240:
+            break
+        title_lines.append(line)
+        if len(title_lines) >= 3 or sum(len(item) for item in title_lines) >= 230:
+            break
+
+    if not title_lines:
+        return fallback_name
+    title = " ".join(title_lines)
+    title = re.sub(r"(?<=[A-Za-z])-\s+(?=[a-z])", "", title)
+    title = re.sub(r"\s+", " ", title).strip(" ._-")
+    if len(title) < 4 or len(title) > 255:
+        return fallback_name
+    return title
+
+
 def extract_pages(content: bytes, extension: str) -> list[PageText]:
     extension = extension.lower()
     if extension == ".pdf":

@@ -1,7 +1,7 @@
 from ..config import Settings
 
 
-PARSER_REVISION = "pdf-clean-v4"
+PARSER_REVISION = "pdf-clean-v5-title"
 
 
 def current_index_signature(settings: Settings) -> str:
