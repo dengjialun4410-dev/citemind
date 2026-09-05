@@ -95,6 +95,22 @@ def test_end_to_end_document_chat_and_evaluation() -> None:
         assert body["confidence"] in {"high", "medium", "low"}
         assert 0 <= body["evidence_coverage"] <= 1
 
+        conversations = client.get(
+            f"/api/knowledge-bases/{knowledge_base_id}/conversations",
+            headers=headers,
+        )
+        assert conversations.status_code == 200
+        assert conversations.json()[0]["id"] == body["conversation_id"]
+        assert conversations.json()[0]["message_count"] == 2
+        detail = client.get(f"/api/conversations/{body['conversation_id']}", headers=headers)
+        assert detail.status_code == 200
+        assert [message["role"] for message in detail.json()["messages"]] == ["user", "assistant"]
+        restored_answer = detail.json()["messages"][1]
+        assert restored_answer["citations"]
+        assert restored_answer["generation_mode"] == body["generation_mode"]
+        assert restored_answer["retrieval_ms"] == body["retrieval_ms"]
+        assert restored_answer["confidence"] == body["confidence"]
+
         unrelated = client.post(
             f"/api/knowledge-bases/{knowledge_base_id}/chat",
             headers=headers,
@@ -104,6 +120,15 @@ def test_end_to_end_document_chat_and_evaluation() -> None:
         assert unrelated.json()["citations"] == []
         assert unrelated.json()["generation_mode"] == "relevance-rejection"
         assert "与当前知识库" in unrelated.json()["answer"]
+        removed = client.delete(
+            f"/api/conversations/{unrelated.json()['conversation_id']}",
+            headers=headers,
+        )
+        assert removed.status_code == 204
+        assert client.get(
+            f"/api/conversations/{unrelated.json()['conversation_id']}",
+            headers=headers,
+        ).status_code == 404
 
         with client.stream(
             "POST",

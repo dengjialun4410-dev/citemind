@@ -1,7 +1,7 @@
 "use client";
 
 import { ChangeEvent, CSSProperties, FormEvent, useEffect, useRef, useState } from "react";
-import { api, ChatResult, clearToken, DocumentComparison, DocumentItem, EvaluationDataset, EvaluationRun, KnowledgeBase, ObservabilitySummary, ReadingCard, ReaderChunk, saveToken, User } from "@/lib/api";
+import { api, ChatResult, clearToken, ConversationSummary, DocumentComparison, DocumentItem, EvaluationDataset, EvaluationRun, KnowledgeBase, ObservabilitySummary, ReadingCard, ReaderChunk, saveToken, User } from "@/lib/api";
 import { ArrowIcon, CheckIcon, FileIcon, LibraryIcon, PlusIcon, QuoteIcon, SearchIcon, SparkIcon, UploadIcon } from "@/components/icons";
 
 type ChatMessage = {
@@ -97,8 +97,10 @@ export default function Home() {
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [selectedDocumentId, setSelectedDocumentId] = useState<number | "all" | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [question, setQuestion] = useState("");
   const [conversationId, setConversationId] = useState<number>();
+  const [historyBusy, setHistoryBusy] = useState(false);
   const [isUploading, setUploading] = useState(false);
   const [isAsking, setAsking] = useState(false);
   const [reindexingId, setReindexingId] = useState<number | null>(null);
@@ -145,6 +147,7 @@ export default function Home() {
           ?? null;
       });
     }).catch((err: Error) => setError(err.message));
+    api.listConversations(activeId).then(setConversations).catch(() => setConversations([]));
     api.listEvaluationDatasets(activeId).then(setEvaluationDatasets).catch(() => setEvaluationDatasets([]));
     setMessages([]);
     setConversationId(undefined);
@@ -195,6 +198,54 @@ export default function Home() {
     setUser(null);
     setKnowledgeBases([]);
     setActiveId(null);
+  }
+
+  function startNewConversation() {
+    setMessages([]);
+    setConversationId(undefined);
+    setError("");
+  }
+
+  async function openConversation(id: number) {
+    if (historyBusy || id === conversationId) return;
+    setHistoryBusy(true);
+    setError("");
+    try {
+      const conversation = await api.getConversation(id);
+      setConversationId(conversation.id);
+      setMessages(conversation.messages.map((message) => ({
+        role: message.role,
+        content: message.content,
+        result: message.role === "assistant" ? {
+          conversation_id: conversation.id,
+          answer: message.content,
+          citations: message.citations,
+          retrieval_ms: message.retrieval_ms,
+          generation_mode: message.generation_mode,
+          confidence: message.confidence,
+          evidence_coverage: message.evidence_coverage,
+        } : undefined,
+      })));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "读取历史对话失败");
+    } finally {
+      setHistoryBusy(false);
+    }
+  }
+
+  async function removeConversation(id: number) {
+    if (historyBusy) return;
+    setHistoryBusy(true);
+    setError("");
+    try {
+      await api.deleteConversation(id);
+      setConversations((items) => items.filter((item) => item.id !== id));
+      if (conversationId === id) startNewConversation();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "删除历史对话失败");
+    } finally {
+      setHistoryBusy(false);
+    }
   }
 
   async function addCitationToEvaluation(questionText: string, chunkId: number) {
@@ -260,6 +311,7 @@ export default function Home() {
       });
       setConversationId(result.conversation_id);
       setMessages((current) => current.map((message, index) => index === current.length - 1 ? { ...message, content: result.answer, result } : message));
+      api.listConversations(activeId).then(setConversations).catch(() => undefined);
     } catch (err) {
       const message = err instanceof Error ? err.message : "问答失败";
       setError(message);
@@ -388,7 +440,7 @@ export default function Home() {
     <main className="app-shell">
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark"><SparkIcon /></span><span>CiteMind</span></div>
-        <button className="new-chat" onClick={() => { setMessages([]); setConversationId(undefined); }}><PlusIcon /> 新建研究对话</button>
+        <button className="new-chat" onClick={startNewConversation}><PlusIcon /> 新建研究对话</button>
 
         <div className="side-section">
           <div className="side-label"><span>知识库</span><button aria-label="新建知识库"><PlusIcon /></button></div>
@@ -398,6 +450,20 @@ export default function Home() {
                 <span className="knowledge-icon"><LibraryIcon /></span>
                 <span><strong>{kb.name}</strong><small>{kb.document_count} 篇文档</small></span>
               </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="side-section history-section">
+          <div className="side-label"><span>最近对话</span><small>{conversations.length}</small></div>
+          <div className="conversation-list">
+            {conversations.length === 0 ? <p className="history-empty">提问后，对话会自动保存在这里</p> : conversations.map((conversation) => (
+              <div className={`conversation-row ${conversationId === conversation.id ? "active" : ""}`} key={conversation.id}>
+                <button type="button" className="conversation-open" onClick={() => void openConversation(conversation.id)} disabled={historyBusy} title={conversation.title}>
+                  <strong>{conversation.title}</strong><small>{conversation.message_count} 条消息</small>
+                </button>
+                <button type="button" className="conversation-delete" onClick={() => void removeConversation(conversation.id)} disabled={historyBusy} aria-label={`删除对话：${conversation.title}`}>×</button>
+              </div>
             ))}
           </div>
         </div>
@@ -436,7 +502,7 @@ export default function Home() {
                       <div className="message-body">
                         <div className="message-meta">{message.role === "user" ? "你的问题" : "CiteMind"}</div>
                         {message.role === "assistant" && !message.content ? <div className="thinking"><i /><i /><i />正在流式生成</div> : message.role === "assistant" ? renderTranslatableText(message.content, `answer-${index}`) : <p>{message.content}</p>}
-                        {message.result && <div className="answer-meta"><span><CheckIcon /> 已核对 {message.result.citations.length} 条证据</span><span>语义 + BM25 · {message.result.retrieval_ms} ms</span><span className={`confidence ${getConfidence(message.result)}`}>{confidenceLabel[getConfidence(message.result)]} · {(getEvidenceCoverage(message.result) * 100).toFixed(0)}%</span><span>{message.result.generation_mode === "remote-llm" ? "模型综合" : message.result.generation_mode === "local-fallback" ? "模型降级" : message.result.generation_mode === "relevance-rejection" ? "超出知识库范围" : "本地摘要"}</span></div>}
+                        {message.result && <div className="answer-meta"><span><CheckIcon /> 已核对 {message.result.citations.length} 条证据</span><span>语义 + BM25 · {message.result.retrieval_ms} ms</span><span className={`confidence ${getConfidence(message.result)}`}>{confidenceLabel[getConfidence(message.result)]} · {(getEvidenceCoverage(message.result) * 100).toFixed(0)}%</span><span>{message.result.generation_mode === "remote-llm" ? "模型综合" : message.result.generation_mode === "local-fallback" ? "模型降级" : message.result.generation_mode === "relevance-rejection" ? "超出知识库范围" : message.result.generation_mode === "history" ? "历史记录" : "本地摘要"}</span></div>}
                         {message.result?.citations.map((citation, citationIndex) => (
                           <details className="citation" key={citation.chunk_id}>
                             <summary><QuoteIcon /><span>[{citationIndex + 1}] {citation.document_name}</span><b>相关度 {Math.round(Math.min(1, citation.score) * 100)}% · 第 {citation.page_number} 页</b></summary>

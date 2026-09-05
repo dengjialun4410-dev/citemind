@@ -130,6 +130,31 @@ class ChatResponse(BaseModel):
     evidence_coverage: float
 
 
+class ConversationSummaryOut(BaseModel):
+    id: int
+    title: str
+    message_count: int
+    updated_at: datetime
+
+
+class StoredMessageOut(BaseModel):
+    id: int
+    role: str
+    content: str
+    citations: list[CitationOut] = Field(default_factory=list)
+    retrieval_ms: int = 0
+    generation_mode: str = "history"
+    confidence: str = "low"
+    evidence_coverage: float = 0.0
+    created_at: datetime
+
+
+class ConversationDetailOut(BaseModel):
+    id: int
+    title: str
+    messages: list[StoredMessageOut]
+
+
 class HealthResponse(BaseModel):
     status: str
     model_mode: str

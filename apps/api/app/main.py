@@ -36,6 +36,8 @@ from .schemas import (
     ChatResponse,
     CitationOut,
     ComparisonRowOut,
+    ConversationDetailOut,
+    ConversationSummaryOut,
     DocumentComparisonOut,
     DocumentOut,
     EvaluationDatasetCreate,
@@ -51,6 +53,7 @@ from .schemas import (
     ReadingCardOut,
     ReaderChunkOut,
     ResearchEvidenceOut,
+    StoredMessageOut,
     TokenResponse,
     TranslationRequest,
     TranslationResponse,
@@ -485,6 +488,125 @@ async def reindex_document(
     return document_out(document)
 
 
+@app.get(
+    "/api/knowledge-bases/{knowledge_base_id}/conversations",
+    response_model=list[ConversationSummaryOut],
+)
+def list_conversations(
+    knowledge_base_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[ConversationSummaryOut]:
+    require_knowledge_base(db, knowledge_base_id, current_user)
+    rows = db.execute(
+        select(
+            Conversation,
+            func.count(Message.id).label("message_count"),
+            func.max(Message.created_at).label("last_message_at"),
+        )
+        .outerjoin(Message, Message.conversation_id == Conversation.id)
+        .where(Conversation.knowledge_base_id == knowledge_base_id)
+        .group_by(Conversation.id)
+        .order_by(func.coalesce(func.max(Message.created_at), Conversation.created_at).desc())
+        .limit(30)
+    ).all()
+    return [
+        ConversationSummaryOut(
+            id=conversation.id,
+            title=conversation.title,
+            message_count=message_count,
+            updated_at=last_message_at or conversation.created_at,
+        )
+        for conversation, message_count, last_message_at in rows
+    ]
+
+
+@app.get("/api/conversations/{conversation_id}", response_model=ConversationDetailOut)
+def get_conversation(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ConversationDetailOut:
+    conversation = db.get(Conversation, conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="对话不存在")
+    require_knowledge_base(db, conversation.knowledge_base_id, current_user)
+
+    messages = list(
+        db.scalars(
+            select(Message)
+            .where(Message.conversation_id == conversation.id)
+            .order_by(Message.id)
+        )
+    )
+    message_ids = [message.id for message in messages]
+    stored_citations = list(
+        db.scalars(
+            select(Citation)
+            .where(Citation.message_id.in_(message_ids))
+            .order_by(Citation.id)
+        )
+    ) if message_ids else []
+    chunk_ids = {citation.chunk_id for citation in stored_citations}
+    chunks_by_id = {
+        chunk.id: chunk
+        for chunk in db.scalars(select(Chunk).where(Chunk.id.in_(chunk_ids)))
+    } if chunk_ids else {}
+    citations_by_message: dict[int, list[CitationOut]] = {}
+    for citation in stored_citations:
+        chunk = chunks_by_id.get(citation.chunk_id)
+        citations_by_message.setdefault(citation.message_id, []).append(
+            CitationOut(
+                chunk_id=citation.chunk_id,
+                document_name=citation.document_name,
+                page_number=citation.page_number,
+                section=chunk.section_path if chunk else "",
+                quote=citation.quote,
+                score=round(citation.score, 4),
+            )
+        )
+
+    output_messages: list[StoredMessageOut] = []
+    for message in messages:
+        citations = citations_by_message.get(message.id, [])
+        output_messages.append(
+            StoredMessageOut(
+                id=message.id,
+                role=message.role,
+                content=message.content,
+                citations=citations,
+                retrieval_ms=message.retrieval_ms or 0,
+                generation_mode=message.generation_mode or "history",
+                confidence=message.confidence or ("high" if citations else "low"),
+                evidence_coverage=(
+                    message.evidence_coverage
+                    if message.evidence_coverage is not None
+                    else (1.0 if citations else 0.0)
+                ),
+                created_at=message.created_at,
+            )
+        )
+    return ConversationDetailOut(
+        id=conversation.id,
+        title=conversation.title,
+        messages=output_messages,
+    )
+
+
+@app.delete("/api/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_conversation(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    conversation = db.get(Conversation, conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="对话不存在")
+    require_knowledge_base(db, conversation.knowledge_base_id, current_user, write=True)
+    db.delete(conversation)
+    db.commit()
+
+
 @app.post("/api/knowledge-bases/{knowledge_base_id}/chat", response_model=ChatResponse)
 async def chat(
     knowledge_base_id: int,
@@ -581,6 +703,10 @@ async def chat(
             )
         )
     confidence, evidence_coverage = summarize_evidence_quality(cited_hits)
+    assistant_message.retrieval_ms = retrieval_ms
+    assistant_message.generation_mode = generation_mode
+    assistant_message.confidence = confidence
+    assistant_message.evidence_coverage = evidence_coverage
     db.commit()
     return ChatResponse(
         conversation_id=conversation.id,

@@ -6,6 +6,9 @@ export interface KnowledgeBase { id: number; name: string; description: string; 
 export interface DocumentItem { id: number; name: string; file_type: string; status: "processing" | "ready" | "failed"; page_count: number; chunk_count: number; needs_reindex: boolean; error_message?: string; created_at: string }
 export interface Citation { chunk_id: number; document_name: string; page_number: number; section: string; quote: string; score: number }
 export interface ChatResult { conversation_id: number; answer: string; citations: Citation[]; retrieval_ms: number; generation_mode: string; confidence: "high" | "medium" | "low"; evidence_coverage: number }
+export interface ConversationSummary { id: number; title: string; message_count: number; updated_at: string }
+export interface StoredMessage { id: number; role: "user" | "assistant"; content: string; citations: Citation[]; retrieval_ms: number; generation_mode: string; confidence: "high" | "medium" | "low"; evidence_coverage: number; created_at: string }
+export interface ConversationDetail { id: number; title: string; messages: StoredMessage[] }
 export interface ResearchEvidence { page_number: number; section: string; quote: string }
 export interface ReadingCard { document_id: number; document_name: string; overview: string; research_question: string; method: string; datasets_and_metrics: string; findings: string; limitations: string; evidence: ResearchEvidence[] }
 export interface DocumentComparison { document_ids: number[]; document_names: string[]; rows: { label: string; values: string[] }[]; evidence: Record<number, ResearchEvidence[]> }
@@ -87,6 +90,9 @@ export const api = {
   getDocumentReader: (documentId: number) => authFetch(`/api/documents/${documentId}/reader`).then(parseResponse<ReaderChunk[]>),
   translate: (text: string) => authFetch("/api/translate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) }).then(parseResponse<TranslationResult>),
   compareDocuments: (knowledgeBaseId: number, documentIds: number[]) => authFetch(`/api/knowledge-bases/${knowledgeBaseId}/document-comparison`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(documentIds) }).then(parseResponse<DocumentComparison>),
+  listConversations: (knowledgeBaseId: number) => authFetch(`/api/knowledge-bases/${knowledgeBaseId}/conversations`, { cache: "no-store" }).then(parseResponse<ConversationSummary[]>),
+  getConversation: (conversationId: number) => authFetch(`/api/conversations/${conversationId}`, { cache: "no-store" }).then(parseResponse<ConversationDetail>),
+  deleteConversation: (conversationId: number) => authFetch(`/api/conversations/${conversationId}`, { method: "DELETE" }).then(parseResponse<void>),
   ask: (knowledgeBaseId: number, question: string, conversationId?: number, documentIds?: number[]) => authFetch(`/api/knowledge-bases/${knowledgeBaseId}/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question, conversation_id: conversationId, document_ids: documentIds }) }).then(parseResponse<ChatResult>),
   askStream,
   listEvaluationDatasets: (knowledgeBaseId: number) => authFetch(`/api/knowledge-bases/${knowledgeBaseId}/evaluation-datasets`).then(parseResponse<EvaluationDataset[]>),
